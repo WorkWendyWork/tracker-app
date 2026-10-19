@@ -110,17 +110,28 @@ test('describeChanges and withHistory', () => {
     assert.equal(long[long.length - 1].text, 'e59');
 });
 
-test('settings and prompts', () => {
-    assert.deepEqual(lib.sanitizeSettings(null), lib.DEFAULT_SETTINGS);
-    const s = lib.sanitizeSettings({ engine: ' Godot ', genre: 'platformer', language: 'GDScript', admin: true });
-    assert.deepEqual(s, { engine: 'Godot', genre: 'platformer', language: 'GDScript' });
-    const p = lib.buildClaudePrompt(s, { subject: 'UI & Navigation', impact: '2', desc: 'Menu breaks' });
-    assert.match(p, /Godot platformer/);
-    assert.match(p, /Godot GDScript/);
-    assert.match(p, /High/);
-    assert.match(p, /Menu breaks/);
+test('categorize prompt', () => {
     assert.match(lib.buildCategorizePrompt('x'.repeat(10000)), /^Analyze/);
     assert.ok(lib.buildCategorizePrompt('x'.repeat(10000)).length < 5000);
+});
+
+test('formatIssueText', () => {
+    const text = lib.formatIssueText({
+        tag: 'BUG-0007', impact: '1', subject: 'UI & Navigation', status: 'in_progress',
+        milestone: 'Alpha', points: '3', assignee: 'ann@x.com', tags: 'ui, menu',
+        desc: '  Menu **breaks**  ', notes: [{ date: '10/19 9:05', author: 'Ann', text: 'Repro on PC' }]
+    }, e => e === 'ann@x.com' ? 'Ann' : e);
+    assert.equal(text, [
+        'BUG-0007 · Critical · UI & Navigation',
+        'Status: In Progress | Milestone: Alpha | Points: 3 | Assignee: Ann | Tags: ui, menu',
+        '',
+        'Menu **breaks**',
+        '',
+        'Notes:',
+        '- 10/19 9:05 (Ann): Repro on PC'
+    ].join('\n'));
+    const minimal = lib.formatIssueText({ tag: '', impact: '4', subject: 'Visuals & Juice', status: 'open', desc: 'x', notes: [] });
+    assert.equal(minimal, 'NEW · Low · Visuals & Juice\nStatus: Open\n\nx');
 });
 
 test('checkImageFile', () => {

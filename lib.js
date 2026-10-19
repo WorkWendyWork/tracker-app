@@ -10,8 +10,6 @@ const POINTS = ['1', '2', '3', '5', '8'];
 const LIMITS = { desc: 20000, milestone: 60, tags: 300, note: 2000, notes: 200, history: 50, text: 200 };
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-const DEFAULT_SETTINGS = { engine: 'Unity', genre: 'idle/incremental game', language: 'C#' };
-
 const IMPACT_LABELS = { '1': 'Critical', '2': 'High', '3': 'Medium', '4': 'Low' };
 const IMPACT_COLORS = {
     '1': 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200 border-red-300 dark:border-red-800',
@@ -139,18 +137,25 @@ function withHistory(history, by, text, at = Date.now()) {
     return [...(history || []), { at, by: clip(by, LIMITS.text), text: clip(text, LIMITS.text) }].slice(-LIMITS.history);
 }
 
-function sanitizeSettings(raw) {
-    const s = raw && typeof raw === 'object' ? raw : {};
-    return {
-        engine: clip(s.engine, 60).trim() || DEFAULT_SETTINGS.engine,
-        genre: clip(s.genre, 100).trim() || DEFAULT_SETTINGS.genre,
-        language: clip(s.language, 40).trim() || DEFAULT_SETTINGS.language
-    };
-}
-
-function buildClaudePrompt(settings, issue) {
-    const s = sanitizeSettings(settings);
-    return `I am a game developer working on a ${s.engine} ${s.genre}. I need help fixing this issue from my backlog:\n\n**Subject:** ${issue.subject}\n**Priority:** ${getImpactLabel(issue.impact)}\n**Issue Description:**\n${issue.desc}\n\nCan you analyze this issue, suggest potential architectural or code solutions in ${s.engine} ${s.language}, and give me a step-by-step approach to fixing it?`;
+// Plain-text version of an issue for the Copy button. `nameOf` maps an assignee email to a display name.
+function formatIssueText(issue, nameOf = (e) => e) {
+    const details = [
+        `Status: ${STATUS_LABELS[issue.status] || issue.status}`,
+        issue.milestone && `Milestone: ${issue.milestone}`,
+        issue.points && `Points: ${issue.points}`,
+        issue.assignee && `Assignee: ${nameOf(issue.assignee)}`,
+        parseTags(issue.tags).length && `Tags: ${parseTags(issue.tags).join(', ')}`
+    ].filter(Boolean).join(' | ');
+    const lines = [
+        `${issue.tag || 'NEW'} · ${getImpactLabel(issue.impact)} · ${issue.subject}`,
+        details,
+        '',
+        String(issue.desc || '').trim()
+    ];
+    if (issue.notes && issue.notes.length) {
+        lines.push('', 'Notes:', ...issue.notes.map(n => `- ${n.date}${n.author ? ' (' + n.author + ')' : ''}: ${n.text}`));
+    }
+    return lines.join('\n');
 }
 
 function buildCategorizePrompt(desc) {
@@ -179,10 +184,10 @@ function chunk(arr, size) {
 
 if (typeof module !== 'undefined') {
     module.exports = {
-        STATUSES, STATUS_LABELS, SUBJECTS, POINTS, LIMITS, MAX_IMAGE_BYTES, DEFAULT_SETTINGS,
+        STATUSES, STATUS_LABELS, SUBJECTS, POINTS, LIMITS, MAX_IMAGE_BYTES,
         getImpactLabel, getImpactColor, esc, bugNum, fmtBug, nextBugNumber, newId,
         parseTags, normalizeProjectName, filterIssues, progressPct, milestonesOf, formatDate,
-        sanitizeIssue, validateImport, describeChanges, withHistory, sanitizeSettings,
-        buildClaudePrompt, buildCategorizePrompt, checkImageFile, parseAiJson, chunk
+        sanitizeIssue, validateImport, describeChanges, withHistory,
+        formatIssueText, buildCategorizePrompt, checkImageFile, parseAiJson, chunk
     };
 }

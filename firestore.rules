@@ -60,15 +60,6 @@ service cloud.firestore {
           && request.resource.data.list.size() <= 100;
       }
 
-      match /meta/settings {
-        allow read: if isTeamMember();
-        allow write: if isTeamMember()
-          && request.resource.data.keys().hasOnly(['engine', 'genre', 'language'])
-          && isShortString(request.resource.data.engine, 60)
-          && isShortString(request.resource.data.genre, 100)
-          && isShortString(request.resource.data.language, 40);
-      }
-
       // Journal for multi-step jobs (rename, import)
       match /ops/{opId} {
         allow read, delete: if isTeamMember();

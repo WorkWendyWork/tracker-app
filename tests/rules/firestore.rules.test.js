@@ -73,8 +73,7 @@ test('project counter and lists are validated', async () => {
     await assertFails(db.doc(`${WS}/projects/main`).set({ nextBug: 0 }));
     await assertSucceeds(db.doc(`${WS}/meta/projects`).set({ list: ['main', 'Beta'] }));
     await assertFails(db.doc(`${WS}/meta/projects`).set({ list: [] }));
-    await assertSucceeds(db.doc(`${WS}/meta/settings`).set({ engine: 'Godot', genre: 'platformer', language: 'GDScript' }));
-    await assertFails(db.doc(`${WS}/meta/settings`).set({ engine: 'Godot', genre: 'x', language: 'y', admin: true }));
+    await assertFails(db.doc(`${WS}/meta/settings`).set({ engine: 'Godot' })); // removed feature: locked
 });
 
 test('ops journal accepts only known job types', async () => {

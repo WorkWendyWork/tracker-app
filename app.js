@@ -18,7 +18,6 @@ let issues = [];
 let projects = ['main'];
 let currentProject = 'main';
 let members = [];             // [{ email, name }] — teammates who have signed in
-let settings = { ...DEFAULT_SETTINGS };
 let isKanban = false;
 let selectedIssues = new Set();
 let db = null;
@@ -88,7 +87,6 @@ function hideToast() {
 // Local storage (used while signed out, kept in this browser)
 // ==========================================
 const LOCAL_KEY = 'btp_local_v1';
-const SETTINGS_KEY = 'btp_settings';
 
 function readLocal() {
     try {
@@ -110,7 +108,6 @@ const localStore = {
         if (!projects.includes(currentProject)) currentProject = projects[0];
         issues = (local.issues[currentProject] || []).map(sanitizeIssue);
         members = [];
-        try { settings = sanitizeSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY))); } catch (e) { settings = { ...DEFAULT_SETTINGS }; }
         updateProjectDropdown();
         updateAssigneeOptions();
         renderIssues();
@@ -170,10 +167,6 @@ const localStore = {
         currentProject = newName;
         writeLocal();
         this.load();
-    },
-    saveSettings(s) {
-        settings = s;
-        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
     }
 };
 
@@ -181,7 +174,6 @@ const localStore = {
 // Cloud storage (Firestore, one document per issue)
 //   workspaces/{ws}/meta/projects            { list: [...] }
 //   workspaces/{ws}/meta/members             { list: [{ email, name }] }
-//   workspaces/{ws}/meta/settings            { engine, genre, language }
 //   workspaces/{ws}/ops/{opId}               journal for multi-step jobs
 //   workspaces/{ws}/projects/{p}             { nextBug }
 //   workspaces/{ws}/projects/{p}/issues/{id} { ...issue }
@@ -326,10 +318,6 @@ const cloudStore = {
             currentProject = newName;
             subscribeIssues();
         } catch (e) { handleCloudError(e, 'Rename error:'); }
-    },
-    async saveSettings(s) {
-        settings = s;
-        try { await metaRef('settings').set(s); } catch (e) { handleCloudError(e, 'Settings error:'); }
     }
 };
 
@@ -438,10 +426,7 @@ function subscribeMeta() {
             members = (doc.exists && Array.isArray(doc.data().list)) ? doc.data().list : [];
             updateAssigneeOptions();
             renderIssues();
-        }, e => console.warn('Member list unavailable:', e)),
-        metaRef('settings').onSnapshot(doc => {
-            settings = sanitizeSettings(doc.exists ? doc.data() : null);
-        }, e => console.warn('Settings unavailable:', e))
+        }, e => console.warn('Member list unavailable:', e))
     ];
 }
 
@@ -633,7 +618,7 @@ function buildIssueCardHTML(issue) {
                 </select>
                 <button type="button" data-action="editIssue" data-id="${sid}" class="${btnCls}" aria-label="Edit ${label}">Edit</button>
                 <button type="button" data-action="addNote" data-id="${sid}" class="${btnCls}" aria-label="Add note to ${label}">Note</button>
-                <button type="button" data-action="askClaude" data-id="${sid}" class="text-xs px-2 py-1 rounded bg-[#F0E6D2] text-[#6B5B3E] hover:bg-[#E6D5B8] dark:bg-[#3D382D] dark:text-[#D4C5A9] dark:hover:bg-[#4D4638] font-medium transition" title="Copy prompt and open Claude">🤖 Claude</button>
+                <button type="button" data-action="copyIssue" data-id="${sid}" class="${btnCls}" title="Copy this issue as text" aria-label="Copy ${label} as text">📋 Copy</button>
             </div>
         </article>
     `;
@@ -921,12 +906,11 @@ async function copyText(text) {
     document.body.removeChild(ta);
 }
 
-async function askClaude(id) {
+async function copyIssue(id) {
     const issue = issues.find(i => i.id === id);
     if (!issue) return;
-    await copyText(buildClaudePrompt(settings, issue));
-    toast('Prompt copied! Paste it into Claude.');
-    window.open('https://claude.ai/new', '_blank', 'noopener');
+    await copyText(formatIssueText(issue, memberName));
+    toast(`${issue.tag || 'Issue'} copied to clipboard.`);
 }
 
 function applyCategory(result) {
@@ -1046,21 +1030,6 @@ async function confirmProjectModal() {
 
 $('projectModalInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmProjectModal(); });
 
-function openSettings() {
-    $('setEngine').value = settings.engine;
-    $('setGenre').value = settings.genre;
-    $('setLanguage').value = settings.language;
-    openModal('settingsModal', 'setEngine');
-}
-
-$('settingsForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const s = sanitizeSettings({ engine: $('setEngine').value, genre: $('setGenre').value, language: $('setLanguage').value });
-    closeModals();
-    await store().saveSettings(s);
-    toast('Settings saved.');
-});
-
 // ==========================================
 // Import/Export Backup
 // ==========================================
@@ -1100,7 +1069,6 @@ const actions = {
     openProjectModal: (el) => openProjectModal(el.dataset.mode),
     confirmProjectModal: () => confirmProjectModal(),
     toggleAuth: () => toggleAuth(),
-    openSettings: () => openSettings(),
     toggleTheme: () => toggleTheme(),
     openShareModal: () => openModal('shareModal'),
     closeModals: () => closeModals(),
@@ -1120,7 +1088,7 @@ const actions = {
     addNote: (el) => openNoteModal(el.dataset.id),
     editNote: (el) => openNoteModal(el.dataset.id, el.dataset.note),
     deleteNote: (el) => deleteNote(el.dataset.id, el.dataset.note),
-    askClaude: (el) => askClaude(el.dataset.id),
+    copyIssue: (el) => copyIssue(el.dataset.id),
     forgetGeminiKey: () => { try { localStorage.removeItem('gemini_api_key'); } catch (e) {} toast('Gemini key removed from this browser.'); }
 };
 

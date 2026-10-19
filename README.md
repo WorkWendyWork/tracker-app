@@ -77,11 +77,8 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
   ```bash
   npm run deploy:functions
   ```
-  Without the function, the ✨ button asks each person for their own Gemini key and stores it only in their browser (⚙️ → *Forget my Gemini key* removes it).
+  Without the function, the ✨ button asks each person for their own Gemini key and stores it only in their browser (ℹ️ Share → *Forget my Gemini key* removes it).
 - **Daily backups:** in Google Cloud Console create a service account with the *Cloud Datastore User* role, create a JSON key, and save it as the repository secret `FIREBASE_SERVICE_ACCOUNT`. The *Daily backup* workflow then saves the database as a downloadable artifact every day (kept 90 days). You can also run it manually from the Actions tab.
-
-## Game settings
-⚙️ sets the engine, genre and language used in the 🤖 Claude prompt (shared with the team when signed in).
 
 ## Security notes
 - All user text is escaped and Markdown is sanitized with DOMPurify.

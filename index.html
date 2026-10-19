@@ -60,7 +60,6 @@
 
             <div class="flex items-center gap-2">
                 <button type="button" id="authBtn" data-action="toggleAuth" class="text-sm px-3 py-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition">🔑 Sign in</button>
-                <button type="button" data-action="openSettings" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Settings" aria-label="Settings">⚙️</button>
                 <button type="button" data-action="toggleTheme" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">🌓</button>
                 <button type="button" data-action="openShareModal" class="text-sm px-3 py-1.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/60 font-medium transition">ℹ️ Share</button>
             </div>
@@ -246,33 +245,6 @@
         </div>
     </div>
 
-    <!-- Settings Modal -->
-    <div id="settingsModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-        <form id="settingsForm" class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-sm border border-gray-200 dark:border-gray-700 space-y-3">
-            <h2 id="settingsTitle" class="text-lg font-bold text-gray-800 dark:text-white">⚙️ Game Settings</h2>
-            <p class="text-xs text-gray-600 dark:text-gray-400">Used in the 🤖 Claude prompt. Shared with your team when signed in.</p>
-            <div>
-                <label for="setEngine" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Engine</label>
-                <input id="setEngine" maxlength="60" placeholder="Unity" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm text-gray-800 dark:text-white outline-none">
-            </div>
-            <div>
-                <label for="setGenre" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Genre / kind of game</label>
-                <input id="setGenre" maxlength="100" placeholder="idle/incremental game" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm text-gray-800 dark:text-white outline-none">
-            </div>
-            <div>
-                <label for="setLanguage" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Programming language</label>
-                <input id="setLanguage" maxlength="40" placeholder="C#" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm text-gray-800 dark:text-white outline-none">
-            </div>
-            <div class="flex justify-between items-center gap-2 pt-2">
-                <button type="button" data-action="forgetGeminiKey" class="text-xs text-red-600 dark:text-red-400 hover:underline">Forget my Gemini key</button>
-                <div class="flex gap-2">
-                    <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition">Cancel</button>
-                    <button type="submit" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Save</button>
-                </div>
-            </div>
-        </form>
-    </div>
-
     <!-- Share Modal -->
     <div id="shareModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
         <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md border border-gray-200 dark:border-gray-700">
@@ -283,7 +255,8 @@
                 <li>To invite a teammate, add their Google email to <code>firestore.rules</code> and <code>storage.rules</code>, deploy the rules, and send them this page's link.</li>
                 <li>Deleted issues can be undone for a few seconds. Use <b>Export</b> any time for a backup file.</li>
             </ul>
-            <div class="flex justify-end">
+            <div class="flex justify-between items-center gap-2">
+                <button type="button" data-action="forgetGeminiKey" class="text-xs text-red-600 dark:text-red-400 hover:underline">Forget my Gemini key</button>
                 <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Got it!</button>
             </div>
         </div>
