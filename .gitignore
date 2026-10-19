@@ -12,3 +12,6 @@ tracker_backup_*.json
 *.log
 node_modules/
 .firebase/
+
+# Local tooling
+.claude/
