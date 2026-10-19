@@ -7,7 +7,7 @@ service firebase.storage {
       return request.auth != null
         && request.auth.token.email_verified == true
         && request.auth.token.email.lower() in [
-          'your-email@example.com'
+          'madboobs@gmail.com'
         ];
     }
 

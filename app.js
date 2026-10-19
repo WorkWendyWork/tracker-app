@@ -3,12 +3,12 @@
 // These values are public by design; access is controlled by firestore.rules.
 // ==========================================
 const firebaseConfig = {
-    apiKey: "AIzaSyBleyHfc4dKFvAMMjFSSj8K06yg4x7FlZI",
-    authDomain: "tracker-pro-20352.firebaseapp.com",
-    projectId: "tracker-pro-20352",
-    storageBucket: "tracker-pro-20352.firebasestorage.app",
-    messagingSenderId: "420152257572",
-    appId: "1:420152257572:web:aca522d09080ecc392fcb1"
+  apiKey: "AIzaSyBleyHfc4dKFvAMMjFSSj8K06yg4x7FlZI",
+  authDomain: "tracker-pro-20352.firebaseapp.com",
+  projectId: "tracker-pro-20352",
+  storageBucket: "tracker-pro-20352.firebasestorage.app",
+  messagingSenderId: "420152257572",
+  appId: "1:420152257572:web:aca522d09080ecc392fcb1"
 };
 const WORKSPACE = 'default_workspace';
 // ==========================================
