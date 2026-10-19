@@ -18,7 +18,7 @@ An issue tracker for game development: list and Kanban views, milestones, story 
 | `theme.js` | Applies the saved theme before the page paints |
 | `tailwind.css` | Pre-built styles (generated from `src/input.css`, committed so GitHub Pages works without a build) |
 | `firestore.rules` / `storage.rules` | Who may read/write, and what valid data looks like |
-| `functions/` | Optional server function for AI categorize (keeps the Gemini key private) |
+| `functions/` | Optional server function for AI suggestions (keeps the Gemini key private) |
 | `scripts/backup.mjs` | Exports the whole database to JSON |
 | `tests/` | Unit tests (`npm test`) and emulator rules tests (`npm run test:rules`) |
 
@@ -70,7 +70,7 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
 
 ### 3. Optional extras
 - **Screenshots** (🖼️ button, or paste an image into the description): enable **Storage** in Firebase. New projects need the Blaze (pay-as-you-go) plan for Storage; usage for a small team typically stays in the free allowance.
-- **AI categorize without personal keys** (Blaze plan): copy `functions/.env.example` to `functions/.env` with the same emails, then
+- **AI suggestions without personal keys** (Blaze plan): copy `functions/.env.example` to `functions/.env` with the same emails, then
   ```bash
   npx firebase functions:secrets:set GEMINI_API_KEY
   ```
@@ -79,6 +79,17 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
   ```
   Without the function, the ✨ button asks each person for their own Gemini key and stores it only in their browser (ℹ️ Share → *Forget my Gemini key* removes it).
 - **Daily backups:** in Google Cloud Console create a service account with the *Cloud Datastore User* role, create a JSON key, and save it as the repository secret `FIREBASE_SERVICE_ACCOUNT`. The *Daily backup* workflow then saves the database as a downloadable artifact every day (kept 90 days). You can also run it manually from the Actions tab.
+
+## AI suggestions
+Type a description and click **✨ AI Category**. Gemini fills in the subject, priority, story points and tags, plus the milestone if one clearly fits. It picks from your team's own subjects, milestones and existing tags. Tags you already typed are kept, and nothing is saved until you click **Save Issue**.
+
+The app asks Google which Gemini models your key can use and picks the newest "flash" model automatically, so it keeps working when Google retires a model.
+
+## Settings (⚙️)
+Edit the team's lists. Changes apply to every project:
+- **Subjects:** add, rename, reorder (this is also the *Sort: Subject* order) or delete. Issues using a deleted subject move to the first subject.
+- **Milestones:** add planned milestones (they appear in the form and the AI can pick them), rename, or delete (cleared from issues).
+- **Tags:** rename to fix typos, merge two tags by giving them the same name, or delete.
 
 ## Search & filters
 - **Search** matches all words across the description, subject, tags, milestone, assignee and notes. Use `"quotes"` for an exact phrase and `-word` to exclude. Press <kbd>/</kbd> to jump to the search box and <kbd>Esc</kbd> to clear it.

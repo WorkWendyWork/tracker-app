@@ -55,7 +55,8 @@ test('invalid issues are rejected', async () => {
     const bad = [
         issue({ impact: '9' }),
         issue({ status: 'deleted' }),
-        issue({ subject: 'Other' }),
+        issue({ subject: '' }),
+        issue({ subject: 's'.repeat(61) }),
         issue({ tag: 'HACK' }),
         issue({ desc: 'x'.repeat(20001) }),
         issue({ points: '13' }),

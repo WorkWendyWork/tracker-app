@@ -18,6 +18,8 @@ let issues = [];
 let projects = ['main'];
 let currentProject = 'main';
 let members = [];             // [{ email, name }] — teammates who have signed in
+const CONFIG_KEY = 'btp_config';
+let config = sanitizeConfig(null); // { subjects, milestones } — editable in ⚙️ Settings
 let isKanban = false;
 let selectedIssues = new Set();
 let db = null;
@@ -108,6 +110,8 @@ const localStore = {
         if (!projects.includes(currentProject)) currentProject = projects[0];
         issues = (local.issues[currentProject] || []).map(sanitizeIssue);
         members = [];
+        try { config = sanitizeConfig(JSON.parse(localStorage.getItem(CONFIG_KEY))); } catch (e) { config = sanitizeConfig(null); }
+        updateSubjectOptions();
         updateProjectDropdown();
         updateAssigneeOptions();
         renderIssues();
@@ -167,6 +171,28 @@ const localStore = {
         currentProject = newName;
         writeLocal();
         this.load();
+    },
+    saveConfig(cfg) {
+        config = cfg;
+        try { localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg)); } catch (e) {}
+        updateSubjectOptions();
+        renderIssues();
+    },
+    // Applies fn(issue) -> changed fields | null to every issue in every project.
+    rewriteIssues(fn) {
+        let n = 0;
+        Object.keys(local.issues).forEach(p => {
+            local.issues[p] = (local.issues[p] || []).map(raw => {
+                const it = sanitizeIssue(raw);
+                const out = fn(it);
+                if (!out) return raw;
+                n++;
+                return { ...it, ...out, history: withHistory(it.history, who(), describeChanges(it, out)), updatedBy: who(), updatedAt: Date.now() };
+            });
+        });
+        writeLocal();
+        this.load();
+        return n;
     }
 };
 
@@ -318,6 +344,33 @@ const cloudStore = {
             currentProject = newName;
             subscribeIssues();
         } catch (e) { handleCloudError(e, 'Rename error:'); }
+    },
+    async saveConfig(cfg) {
+        config = cfg;
+        updateSubjectOptions();
+        renderIssues();
+        try { await metaRef('config').set(cfg); } catch (e) { handleCloudError(e, 'Settings error:'); }
+    },
+    async rewriteIssues(fn) {
+        let n = 0;
+        try {
+            setSyncStatus('⏳ Updating issues...', 'warn');
+            for (const p of projects) {
+                const snap = await issuesCol(p).get();
+                const ops = [];
+                snap.docs.forEach(d => {
+                    const it = sanitizeIssue({ ...d.data(), id: d.id });
+                    const out = fn(it);
+                    if (!out) return;
+                    n++;
+                    const history = withHistory(it.history, who(), describeChanges(it, out));
+                    ops.push(b => b.update(d.ref, { ...out, history, updatedBy: who(), updatedAt: Date.now() }));
+                });
+                await commitInBatches(ops);
+            }
+            setSyncStatus('☁️ Synced', 'ok');
+        } catch (e) { handleCloudError(e, 'Update error:'); }
+        return n;
     }
 };
 
@@ -422,6 +475,11 @@ function subscribeMeta() {
             }
             updateProjectDropdown();
         }, e => handleCloudError(e, 'Project sync error:')),
+        metaRef('config').onSnapshot(doc => {
+            config = sanitizeConfig(doc.exists ? doc.data() : null);
+            updateSubjectOptions();
+            renderIssues();
+        }, e => console.warn('Settings unavailable:', e)),
         metaRef('members').onSnapshot(doc => {
             members = (doc.exists && Array.isArray(doc.data().list)) ? doc.data().list : [];
             updateAssigneeOptions();
@@ -548,7 +606,155 @@ function updateAssigneeOptions() {
 }
 
 function updateMilestoneList() {
-    $('milestoneList').innerHTML = milestonesOf(issues).map(m => `<option value="${esc(m)}"></option>`).join('');
+    const all = [...new Set([...config.milestones, ...milestonesOf(issues)])];
+    $('milestoneList').innerHTML = all.map(m => `<option value="${esc(m)}"></option>`).join('');
+}
+
+function updateSubjectOptions() {
+    const sel = $('subject');
+    const cur = sel.value;
+    sel.innerHTML = config.subjects.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    if (cur) { ensureSubjectOption(cur); sel.value = cur; }
+}
+
+// Keeps an issue's subject selectable even if it was removed from the list.
+function ensureSubjectOption(subject) {
+    const sel = $('subject');
+    if (!subject || [...sel.options].some(o => o.value === subject)) return;
+    const opt = document.createElement('option');
+    opt.value = subject;
+    opt.textContent = `${subject} (not in list)`;
+    sel.appendChild(opt);
+}
+
+// ==========================================
+// ⚙️ Settings: edit subjects, milestones and tags.
+// Changes are made on a draft and applied to all projects on Save.
+// ==========================================
+let settingsDraft = null;
+
+function openSettings() {
+    const used = (fn) => issues.reduce((m, i) => { fn(i).forEach(v => m.set(v, (m.get(v) || 0) + 1)); return m; }, new Map());
+    const subjectUse = used(i => [i.subject]);
+    const milestoneUse = used(i => i.milestone ? [i.milestone] : []);
+    const tagUse = used(i => parseTags(i.tags).map(t => t.toLowerCase()));
+    const row = (name, n) => ({ orig: name, name, n: n || 0, deleted: false });
+    settingsDraft = {
+        subjects: [...new Set([...config.subjects, ...issues.map(i => i.subject)])].map(s => row(s, subjectUse.get(s))),
+        milestones: [...new Set([...config.milestones, ...milestonesOf(issues)])].map(m => row(m, milestoneUse.get(m))),
+        tags: tagsOf(issues).map(t => row(t, tagUse.get(t.toLowerCase())))
+    };
+    renderSettings();
+    openModal('settingsModal');
+}
+
+const SETTINGS_SECTIONS = {
+    subjects: { title: 'Subjects', hint: 'Shown in the form and used by the AI. The order here is the sort order. Deleting a subject moves its issues to the first subject.', max: LIMITS.subject, add: true, order: true },
+    milestones: { title: 'Milestones', hint: 'Planned milestones appear in the form and the AI can pick them. Deleting one clears it from its issues.', max: LIMITS.milestone, add: true },
+    tags: { title: 'Tags', hint: 'Rename to fix typos or merge two tags (give them the same name). Deleting removes the tag from its issues.', max: 30 }
+};
+
+function renderSettings() {
+    const btn = 'text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-30';
+    $('settingsBody').innerHTML = Object.entries(SETTINGS_SECTIONS).map(([list, s]) => {
+        const rows = settingsDraft[list];
+        return `
+        <section class="space-y-2" aria-labelledby="set-${list}">
+            <div class="flex items-center justify-between gap-2">
+                <h3 id="set-${list}" class="font-bold text-gray-800 dark:text-white">${s.title}</h3>
+                ${s.add ? `<button type="button" data-action="settingsAdd" data-list="${list}" class="${btn}">➕ Add</button>` : ''}
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-400">${s.hint} Counts are for the current project.</p>
+            ${rows.length ? `<ul class="space-y-1.5">${rows.map((r, k) => `
+                <li class="flex items-center gap-1.5 ${r.deleted ? 'opacity-50' : ''}">
+                    <label class="sr-only" for="set-${list}-${k}">${s.title} ${k + 1}</label>
+                    <input id="set-${list}-${k}" data-setting="${list}" data-idx="${k}" value="${esc(r.name)}" maxlength="${s.max}" ${r.deleted ? 'disabled' : ''}
+                        class="flex-1 min-w-0 bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-1.5 text-sm text-gray-800 dark:text-white outline-none focus:border-blue-500 ${r.deleted ? 'line-through' : ''}">
+                    <span class="text-[10px] w-14 text-right text-gray-500 dark:text-gray-400" title="Issues in this project">${r.orig ? `${r.n} issue${r.n === 1 ? '' : 's'}` : 'new'}</span>
+                    ${s.order ? `
+                        <button type="button" data-action="settingsMove" data-list="${list}" data-idx="${k}" data-dir="-1" class="${btn}" aria-label="Move ${esc(r.name)} up" ${k === 0 ? 'disabled' : ''}>↑</button>
+                        <button type="button" data-action="settingsMove" data-list="${list}" data-idx="${k}" data-dir="1" class="${btn}" aria-label="Move ${esc(r.name)} down" ${k === rows.length - 1 ? 'disabled' : ''}>↓</button>` : ''}
+                    <button type="button" data-action="settingsDelete" data-list="${list}" data-idx="${k}" class="${btn} ${r.deleted ? '' : 'text-red-600 dark:text-red-400'}" aria-label="${r.deleted ? 'Restore' : 'Delete'} ${esc(r.name)}">${r.deleted ? '↺' : '🗑'}</button>
+                </li>`).join('')}</ul>` : '<p class="text-xs italic text-gray-400">None yet.</p>'}
+        </section>`;
+    }).join('<hr class="border-gray-200 dark:border-gray-700">');
+}
+
+document.addEventListener('input', (e) => {
+    const el = e.target.closest('[data-setting]');
+    if (el && settingsDraft) settingsDraft[el.dataset.setting][Number(el.dataset.idx)].name = el.value;
+});
+
+function settingsAdd(list) {
+    settingsDraft[list].push({ orig: '', name: '', n: 0, deleted: false });
+    renderSettings();
+    const inputs = document.querySelectorAll(`[data-setting="${list}"]`);
+    inputs[inputs.length - 1].focus();
+}
+
+function settingsMove(list, idx, dir) {
+    const rows = settingsDraft[list];
+    const to = idx + dir;
+    if (to < 0 || to >= rows.length) return;
+    [rows[idx], rows[to]] = [rows[to], rows[idx]];
+    renderSettings();
+    const b = document.querySelector(`[data-action="settingsMove"][data-list="${list}"][data-idx="${to}"][data-dir="${dir}"]`) ||
+        document.querySelector(`[data-action="settingsMove"][data-list="${list}"][data-idx="${to}"]`);
+    if (b) b.focus();
+}
+
+function settingsDelete(list, idx) {
+    const r = settingsDraft[list][idx];
+    if (!r.orig) settingsDraft[list].splice(idx, 1); // new, unsaved row: just drop it
+    else r.deleted = !r.deleted;
+    renderSettings();
+}
+
+async function saveSettings() {
+    const d = settingsDraft;
+    const live = (list) => d[list].filter(r => !r.deleted && r.name.trim());
+    const dupes = (rows) => rows.map(r => r.name.trim().toLowerCase()).filter((v, k, a) => a.indexOf(v) !== k);
+
+    const subjects = live('subjects');
+    if (!subjects.length) return toast('Keep at least one subject.');
+    if (dupes(subjects).length) return toast(`Duplicate subject: “${dupes(subjects)[0]}”.`);
+    if (dupes(live('milestones')).length) return toast(`Duplicate milestone: “${dupes(live('milestones'))[0]}”.`);
+
+    // old value -> new value ('' = remove)
+    const fallback = subjects[0].name.trim();
+    const subjectMap = new Map();
+    d.subjects.forEach(r => { if (r.orig && (r.deleted || !r.name.trim() || r.name.trim() !== r.orig)) subjectMap.set(r.orig, r.deleted || !r.name.trim() ? fallback : r.name.trim()); });
+    const milestoneMap = new Map();
+    d.milestones.forEach(r => { if (r.orig && (r.deleted || !r.name.trim() || r.name.trim() !== r.orig)) milestoneMap.set(r.orig, r.deleted ? '' : r.name.trim()); });
+    const tagMap = new Map();
+    d.tags.forEach(r => { if (r.orig && (r.deleted || !r.name.trim() || r.name.trim() !== r.orig)) tagMap.set(r.orig.toLowerCase(), r.deleted ? '' : r.name.trim().replace(/,/g, ' ')); });
+
+    const removals = [...subjectMap].filter(([o]) => d.subjects.find(r => r.orig === o).deleted).length +
+        [...milestoneMap.values()].filter(v => !v).length + [...tagMap.values()].filter(v => !v).length;
+    if (removals && !confirm(`Deleted items will be removed from issues in ALL projects (deleted subjects move to “${fallback}”). Continue?`)) return;
+
+    closeModals();
+    await store().saveConfig(sanitizeConfig({ subjects: subjects.map(r => r.name), milestones: live('milestones').map(r => r.name) }));
+
+    if (subjectMap.size || milestoneMap.size || tagMap.size) {
+        const n = await store().rewriteIssues(i => {
+            const out = {};
+            if (subjectMap.has(i.subject)) out.subject = subjectMap.get(i.subject);
+            if (i.milestone && milestoneMap.has(i.milestone)) out.milestone = milestoneMap.get(i.milestone);
+            const before = parseTags(i.tags);
+            const after = [];
+            before.forEach(t => {
+                const v = tagMap.has(t.toLowerCase()) ? tagMap.get(t.toLowerCase()) : t;
+                if (v && !after.some(a => a.toLowerCase() === v.toLowerCase())) after.push(v);
+            });
+            if (after.join(', ') !== before.join(', ')) out.tags = clip(after.join(', '), LIMITS.tags);
+            return Object.keys(out).length ? out : null;
+        });
+        toast(`Settings saved. ${n} issue${n === 1 ? '' : 's'} updated.`);
+    } else {
+        toast('Settings saved.');
+    }
+    settingsDraft = null;
 }
 
 // ==========================================
@@ -605,7 +811,7 @@ function filterGroups() {
     const groups = [
         { key: 'status', label: 'Status', opts: STATUSES.map(s => [s, STATUS_LABELS[s]]), test: v => i => i.status === v },
         { key: 'impact', label: 'Priority', opts: ['1', '2', '3', '4'].map(v => [v, getImpactLabel(v)]), test: v => i => String(i.impact) === v },
-        { key: 'subject', label: 'Subject', opts: SUBJECTS.map(s => [s, s]), test: v => i => i.subject === v },
+        { key: 'subject', label: 'Subject', opts: [...new Set([...config.subjects, ...issues.map(i => i.subject)])].map(s => [s, s]), test: v => i => i.subject === v },
         { key: 'points', label: 'Story points', opts: [['none', 'None'], ...POINTS.map(p => [p, `${p} pt${p === '1' ? '' : 's'}`])], test: v => i => (i.points || 'none') === v },
         { key: 'milestone', label: 'Milestone', opts: milestonesOf(issues).map(m => [m, m]), test: v => i => i.milestone === v },
         { key: 'assignee', label: 'Assignee', opts: assigneeOpts, test: v => i => v === '@me' ? i.assignee === myEmail() : v === '@none' ? !i.assignee : i.assignee === v },
@@ -757,7 +963,7 @@ function renderIssues() {
     updateBulkActionBar();
 
     updateMilestoneList();
-    const filtered = filterIssues(issues, filters, myEmail());
+    const filtered = filterIssues(issues, filters, myEmail(), config.subjects);
     renderFilterUI(filtered.length);
 
     const empty = `<p class="text-gray-500 dark:text-gray-400 italic mt-4">${issues.length
@@ -820,6 +1026,7 @@ function editIssue(id) {
     if (!issue) return;
     $('editId').value = issue.id;
     $('desc').value = issue.desc;
+    ensureSubjectOption(issue.subject);
     $('subject').value = issue.subject;
     $('impact').value = issue.impact;
     $('points').value = issue.points || '';
@@ -1031,21 +1238,42 @@ async function copyText(text) {
 async function copyIssue(id) {
     const issue = issues.find(i => i.id === id);
     if (!issue) return;
-    await copyText(formatIssueText(issue, memberName));
-    toast(`${issue.tag || 'Issue'} copied to clipboard.`);
+    await copyText(issue.desc);
+    toast('Description copied to clipboard.');
 }
 
-function applyCategory(result) {
-    if (result && SUBJECTS.includes(result.subject)) $('subject').value = result.subject;
-    if (result && ['1', '2', '3', '4'].includes(String(result.impact))) $('impact').value = String(result.impact);
+// What the AI may choose from: the team's subjects, milestones and tags.
+function aiContext() {
+    return {
+        subjects: config.subjects,
+        milestones: [...new Set([...config.milestones, ...milestonesOf(issues)])],
+        tags: tagsOf(issues)
+    };
+}
+
+// Fills every field the AI gave a valid answer for. Returns what changed.
+function applySuggestion(s) {
+    const changed = [];
+    if (s.subject) { ensureSubjectOption(s.subject); $('subject').value = s.subject; changed.push('subject'); }
+    if (s.impact) { $('impact').value = s.impact; changed.push('priority'); }
+    if (s.points) { $('points').value = s.points; changed.push('points'); }
+    if (s.tags) {
+        // Keep tags the user already typed, add the AI's
+        const merged = [...parseTags($('tags').value)];
+        s.tags.forEach(t => { if (!merged.some(m => m.toLowerCase() === t.toLowerCase())) merged.push(t); });
+        $('tags').value = merged.join(', ');
+        changed.push('tags');
+    }
+    if (s.milestone && !$('milestone').value.trim()) { $('milestone').value = s.milestone; changed.push('milestone'); }
+    return changed;
 }
 
 // Preferred: the team's server function (key never reaches the browser).
 // Fallback: a personal Gemini key stored in this browser.
-async function categorizeViaFunction(desc) {
+async function categorizeViaFunction(desc, ctx) {
     if (!isOnline() || !firebase.functions) return null;
     try {
-        const res = await firebase.functions().httpsCallable('categorize', { timeout: 20000 })({ desc });
+        const res = await firebase.functions().httpsCallable('categorize', { timeout: 30000 })({ desc, ...ctx });
         return res.data;
     } catch (e) {
         if (['functions/permission-denied', 'functions/unauthenticated', 'functions/invalid-argument', 'functions/resource-exhausted'].includes(e.code)) throw e;
@@ -1054,40 +1282,80 @@ async function categorizeViaFunction(desc) {
     }
 }
 
-async function categorizeViaKey(desc) {
-    let userApiKey = null;
-    try { userApiKey = localStorage.getItem('gemini_api_key'); } catch (e) {}
-    if (!userApiKey) {
-        userApiKey = prompt("Enter your Gemini API Key to enable AI categorization.\n(It is stored only in this browser. Your team can avoid this by deploying the server function, see README.)");
-        if (!userApiKey) return null;
-        try { localStorage.setItem('gemini_api_key', userApiKey); } catch (e) {}
+const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+
+// Asks Google which models this key may use and picks the best "flash" one.
+async function geminiModel(key, refresh) {
+    try { if (!refresh && localStorage.getItem('gemini_model')) return localStorage.getItem('gemini_model'); } catch (e) {}
+    const res = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': key } });
+    if (res.status === 400 || res.status === 401 || res.status === 403) throw Object.assign(new Error('bad key'), { badKey: true });
+    if (!res.ok) throw new Error(`Could not list Gemini models (status ${res.status}).`);
+    const model = pickGeminiModel((await res.json()).models);
+    if (!model) throw new Error('No suitable Gemini model is available for this API key.');
+    try { localStorage.setItem('gemini_model', model); } catch (e) {}
+    return model;
+}
+
+async function categorizeViaKey(desc, ctx) {
+    let key = null;
+    try { key = localStorage.getItem('gemini_api_key'); } catch (e) {}
+    if (!key) {
+        key = prompt("Enter your Gemini API Key to enable AI suggestions.\nGet one free at aistudio.google.com/apikey\n(It is stored only in this browser.)");
+        if (!key) return null;
+        key = key.trim();
+        try { localStorage.setItem('gemini_api_key', key); } catch (e) {}
     }
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': userApiKey },
-        body: JSON.stringify({ contents: [{ parts: [{ text: buildCategorizePrompt(desc) }] }] })
+    const forgetKey = () => {
+        try { localStorage.removeItem('gemini_api_key'); localStorage.removeItem('gemini_model'); } catch (e) {}
+        return new Error("Gemini rejected the API key, so it was removed. Click ✨ again to enter a new one.");
+    };
+    const body = JSON.stringify({
+        contents: [{ parts: [{ text: buildCategorizePrompt(desc, ctx) }] }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 }
     });
-    if (!response.ok) {
-        if (response.status === 400 || response.status === 403) {
-            try { localStorage.removeItem('gemini_api_key'); } catch (e) {}
-            throw new Error("Invalid API Key. Your saved key has been cleared. Please try again.");
+    try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const model = await geminiModel(key, attempt > 0);
+            const res = await fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                body
+            });
+            if (res.status === 404 && attempt === 0) continue; // model retired: pick a new one
+            if (res.status === 401 || res.status === 403) throw forgetKey();
+            if (res.status === 400) {
+                const msg = ((await res.json().catch(() => ({}))).error || {}).message || '';
+                if (/api key/i.test(msg)) throw forgetKey();
+                throw new Error('Gemini could not handle the request: ' + (msg || 'bad request'));
+            }
+            if (res.status === 429) throw new Error('Gemini quota reached. Try again in a minute.');
+            if (!res.ok) throw new Error(`Gemini request failed (status ${res.status}).`);
+            const data = await res.json();
+            const text = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0].text;
+            if (!text) throw new Error('Gemini returned no answer (it may have been blocked). Try rewording the description.');
+            return parseAiJson(text);
         }
-        throw new Error("API request failed with status " + response.status);
+        throw new Error('Gemini model not found.');
+    } catch (e) {
+        if (e.badKey) throw forgetKey();
+        throw e;
     }
-    const data = await response.json();
-    return parseAiJson(data.candidates[0].content.parts[0].text);
 }
 
 async function autoCategorize() {
     const desc = $('desc').value;
-    if (!desc || desc.length < 5) return toast("Please type a description first!");
+    if (!desc || desc.trim().length < 5) return toast("Please type a description first!");
     const btn = $('aiBtn');
     const originalText = btn.innerText;
     btn.innerText = "⏳ Thinking...";
     btn.disabled = true;
     try {
-        const result = (await categorizeViaFunction(desc)) || (await categorizeViaKey(desc));
-        if (result) { applyCategory(result); toast('Subject and priority suggested.'); }
+        const ctx = aiContext();
+        const raw = (await categorizeViaFunction(desc, ctx)) || (await categorizeViaKey(desc, ctx));
+        if (raw) {
+            const changed = applySuggestion(parseAiSuggestion(raw, ctx));
+            toast(changed.length ? `AI filled in: ${changed.join(', ')}. Check before saving.` : 'The AI had no usable suggestions.');
+        }
     } catch (e) {
         console.error("AI Error:", e);
         toast(e.message || "AI generation failed. Check console.");
@@ -1193,6 +1461,11 @@ const actions = {
     toggleAuth: () => toggleAuth(),
     toggleTheme: () => toggleTheme(),
     openShareModal: () => openModal('shareModal'),
+    openSettings: () => openSettings(),
+    saveSettings: () => saveSettings(),
+    settingsAdd: (el) => settingsAdd(el.dataset.list),
+    settingsMove: (el) => settingsMove(el.dataset.list, Number(el.dataset.idx), Number(el.dataset.dir)),
+    settingsDelete: (el) => settingsDelete(el.dataset.list, Number(el.dataset.idx)),
     closeModals: () => closeModals(),
     exportData: () => exportData(),
     pickImport: () => $('importFile').click(),
@@ -1257,6 +1530,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Initial render ---
+updateSubjectOptions();
 try { filterPanelOpen = localStorage.getItem('filterPanel') === '1'; } catch (e) {}
 try { if (localStorage.getItem('view') === 'kanban') toggleView(); } catch (e) {}
 if (!auth) localStore.load();

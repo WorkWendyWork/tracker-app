@@ -137,7 +137,7 @@ test('progressPct and milestonesOf', () => {
 });
 
 test('sanitizeIssue fills defaults and rejects bad values', () => {
-    const i = lib.sanitizeIssue({ id: 'x/y', desc: 5, impact: 9, status: 'deleted', subject: 'nope', notes: [null, { text: 'hi' }], evil: true });
+    const i = lib.sanitizeIssue({ id: 'x/y', desc: 5, impact: 9, status: 'deleted', subject: '   ', notes: [null, { text: 'hi' }], evil: true });
     assert.notEqual(i.id, 'x/y');
     assert.equal(i.desc, '5');
     assert.equal(i.impact, '3');
@@ -191,28 +191,53 @@ test('describeChanges and withHistory', () => {
     assert.equal(long[long.length - 1].text, 'e59');
 });
 
-test('categorize prompt', () => {
-    assert.match(lib.buildCategorizePrompt('x'.repeat(10000)), /^Analyze/);
+test('categorize prompt includes the team choices and asks for every field', () => {
+    const p = lib.buildCategorizePrompt('Game "crashes" on load', { subjects: ['Audio', 'Netcode'], milestones: ['Alpha'], tags: ['crash'] });
+    assert.match(p, /\["Audio", "Netcode"\]/);
+    assert.match(p, /\["Alpha"\]/);
+    assert.match(p, /\["crash"\]/);
+    for (const k of ['subject', 'impact', 'points', 'tags', 'milestone']) assert.match(p, new RegExp(`"${k}"`));
+    assert.match(p, /"Game \\"crashes\\" on load"/); // description is JSON-quoted, not injectable
     assert.ok(lib.buildCategorizePrompt('x'.repeat(10000)).length < 5000);
+    assert.match(lib.buildCategorizePrompt('x'), /Gameplay & Balance/); // defaults
+    assert.match(lib.buildCategorizePrompt('x'), /"milestone": ""/);
 });
 
-test('formatIssueText', () => {
-    const text = lib.formatIssueText({
-        tag: 'BUG-0007', impact: '1', subject: 'UI & Navigation', status: 'in_progress',
-        milestone: 'Alpha', points: '3', assignee: 'ann@x.com', tags: 'ui, menu',
-        desc: '  Menu **breaks**  ', notes: [{ date: '10/19 9:05', author: 'Ann', text: 'Repro on PC' }]
-    }, e => e === 'ann@x.com' ? 'Ann' : e);
-    assert.equal(text, [
-        'BUG-0007 · Critical · UI & Navigation',
-        'Status: In Progress | Milestone: Alpha | Points: 3 | Assignee: Ann | Tags: ui, menu',
-        '',
-        'Menu **breaks**',
-        '',
-        'Notes:',
-        '- 10/19 9:05 (Ann): Repro on PC'
-    ].join('\n'));
-    const minimal = lib.formatIssueText({ tag: '', impact: '4', subject: 'Visuals & Juice', status: 'open', desc: 'x', notes: [] });
-    assert.equal(minimal, 'NEW · Low · Visuals & Juice\nStatus: Open\n\nx');
+test('parseAiSuggestion keeps only valid values', () => {
+    const ctx = { subjects: ['Audio', 'Netcode'], milestones: ['Alpha v1'], tags: ['Crash', 'ui'] };
+    assert.deepEqual(lib.parseAiSuggestion({ subject: 'audio', impact: 1, points: '5', tags: ['crash', 'New Tag', 'crash', 'a,b'], milestone: 'alpha v1' }, ctx), {
+        subject: 'Audio', impact: '1', points: '5', tags: ['Crash', 'new tag', 'a b'], milestone: 'Alpha v1'
+    });
+    assert.deepEqual(lib.parseAiSuggestion({ subject: 'Graphics', impact: '9', points: '4', tags: [], milestone: 'Beta' }, ctx), {
+        subject: null, impact: null, points: null, tags: null, milestone: null
+    });
+    assert.deepEqual(lib.parseAiSuggestion({ tags: 'one, two, three, four, five' }, ctx).tags, ['one', 'two', 'three', 'four']);
+    assert.deepEqual(lib.parseAiSuggestion(null, ctx).subject, null);
+});
+
+test('pickGeminiModel chooses the newest stable flash model', () => {
+    const m = (name, methods = ['generateContent']) => ({ name: `models/${name}`, supportedGenerationMethods: methods });
+    assert.equal(lib.pickGeminiModel([m('gemini-2.0-flash'), m('gemini-2.5-flash'), m('gemini-2.5-flash-lite'), m('gemini-2.5-pro')]), 'gemini-2.5-flash');
+    assert.equal(lib.pickGeminiModel([m('gemini-3.0-flash-preview'), m('gemini-2.5-flash')]), 'gemini-3.0-flash-preview');
+    assert.equal(lib.pickGeminiModel([m('gemini-3.0-flash'), m('gemini-3.0-flash-preview')]), 'gemini-3.0-flash');
+    assert.equal(lib.pickGeminiModel([m('gemini-2.5-flash-preview-tts'), m('gemini-2.0-flash-lite')]), 'gemini-2.0-flash-lite');
+    assert.equal(lib.pickGeminiModel([m('gemini-2.5-flash', ['embedContent'])]), null);
+    assert.equal(lib.pickGeminiModel(undefined), null);
+});
+
+test('sanitizeConfig', () => {
+    assert.deepEqual(lib.sanitizeConfig(null), { subjects: lib.SUBJECTS, milestones: [] });
+    assert.deepEqual(lib.sanitizeConfig({ subjects: [' Audio ', 'audio', '', 'Netcode'], milestones: ['Alpha', 'alpha', 'Beta'], evil: 1 }), {
+        subjects: ['Audio', 'Netcode'], milestones: ['Alpha', 'Beta']
+    });
+    assert.equal(lib.sanitizeConfig({ subjects: Array.from({ length: 40 }, (_, k) => 's' + k) }).subjects.length, lib.LIMITS.subjects);
+    assert.deepEqual(lib.sanitizeConfig({ subjects: [] }).subjects, lib.SUBJECTS);
+});
+
+test('subject sort follows the team order, unknown subjects last', () => {
+    const issues = ['Netcode', 'Zzz', 'Audio', 'Aaa'].map((subject, k) => ({ id: String(k), tag: `BUG-000${k + 1}`, impact: '3', status: 'open', desc: '', subject }));
+    const order = lib.filterIssues(issues, { sort: 'subject' }, '', ['Netcode', 'Audio']).map(i => i.subject);
+    assert.deepEqual(order, ['Netcode', 'Audio', 'Aaa', 'Zzz']);
 });
 
 test('checkImageFile', () => {

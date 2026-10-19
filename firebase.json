@@ -9,13 +9,25 @@
     {
       "source": "functions",
       "codebase": "default",
-      "ignore": ["node_modules", ".env.example"]
+      "ignore": [
+        "node_modules",
+        ".env.example"
+      ],
+      "predeploy": [
+        "node -e \"require('fs').copyFileSync('lib.js', 'functions/lib.js')\""
+      ]
     }
   ],
   "emulators": {
-    "firestore": { "port": 8080 },
-    "storage": { "port": 9199 },
-    "ui": { "enabled": false },
+    "firestore": {
+      "port": 8080
+    },
+    "storage": {
+      "port": 9199
+    },
+    "ui": {
+      "enabled": false
+    },
     "singleProjectMode": true
   }
 }

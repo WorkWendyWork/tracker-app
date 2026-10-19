@@ -3,11 +3,12 @@
 
 const STATUSES = ['open', 'in_progress', 'fixed'];
 const STATUS_LABELS = { open: 'Open', in_progress: 'In Progress', fixed: 'Fixed' };
+// Default subjects; teams can edit their own list in ⚙️ Settings (see sanitizeConfig).
 const SUBJECTS = ['Gameplay & Balance', 'UI & Navigation', 'Visuals & Juice', 'Technical / Architecture'];
 const POINTS = ['1', '2', '3', '5', '8'];
 
-// Keep in sync with validIssue() in firestore.rules
-const LIMITS = { desc: 20000, milestone: 60, tags: 300, note: 2000, notes: 200, history: 50, text: 200 };
+// Keep in sync with validIssue() and meta/config in firestore.rules
+const LIMITS = { desc: 20000, milestone: 60, subject: 60, tags: 300, note: 2000, notes: 200, history: 50, text: 200, subjects: 30, milestones: 50 };
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const IMPACT_LABELS = { '1': 'Critical', '2': 'High', '3': 'Medium', '4': 'Low' };
@@ -41,24 +42,39 @@ const parseTags = (tags) => String(tags || '').split(',').map(t => t.trim()).fil
 // Project names become Firestore document ids, so keep them simple.
 const normalizeProjectName = (name) => String(name || '').trim().replace(/[^a-zA-Z0-9-_ ]/g, '').slice(0, 60);
 
-// assignee: 'all' | 'mine' | 'none'; `me` is the signed-in email
+// Team-editable lists (⚙️ Settings). Always returns a usable config.
+function sanitizeConfig(raw) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    // Trim, drop empties and case-insensitive duplicates (first spelling wins)
+    const list = (v, max, n) => (Array.isArray(v) ? v : [])
+        .map(s => String(s ?? '').trim().slice(0, max)).filter(Boolean)
+        .filter((s, k, arr) => arr.findIndex(x => x.toLowerCase() === s.toLowerCase()) === k)
+        .slice(0, n);
+    const subjects = list(r.subjects, LIMITS.subject, LIMITS.subjects);
+    return {
+        subjects: subjects.length ? subjects : [...SUBJECTS],
+        milestones: list(r.milestones, LIMITS.milestone, LIMITS.milestones)
+    };
+}
+
 const SORTS = ['priority', 'subject', 'number', 'updated'];
 
 // Unnumbered (NEW) issues sort after numbered ones
 const byNumber = (a, b) => (bugNum(a) || Number.MAX_SAFE_INTEGER) - (bugNum(b) || Number.MAX_SAFE_INTEGER);
 const byPriority = (a, b) => Number(a.impact) - Number(b.impact);
-const bySubject = (a, b) => {
-    const ia = SUBJECTS.indexOf(a.subject), ib = SUBJECTS.indexOf(b.subject);
-    return (ia < 0 ? SUBJECTS.length : ia) - (ib < 0 ? SUBJECTS.length : ib);
-};
 const byUpdated = (a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
 
-const COMPARATORS = {
-    priority: (a, b) => byPriority(a, b) || byNumber(a, b),
-    subject: (a, b) => bySubject(a, b) || byPriority(a, b) || byNumber(a, b),
-    number: byNumber,
-    updated: (a, b) => byUpdated(a, b) || byNumber(a, b)
-};
+// Subjects sort in the team's configured order; unknown ones last, alphabetically.
+function makeComparators(subjects = SUBJECTS) {
+    const rank = (s) => { const k = subjects.indexOf(s); return k < 0 ? subjects.length : k; };
+    const bySubject = (a, b) => (rank(a.subject) - rank(b.subject)) || String(a.subject).localeCompare(String(b.subject));
+    return {
+        priority: (a, b) => byPriority(a, b) || byNumber(a, b),
+        subject: (a, b) => bySubject(a, b) || byPriority(a, b) || byNumber(a, b),
+        number: byNumber,
+        updated: (a, b) => byUpdated(a, b) || byNumber(a, b)
+    };
+}
 
 // ==========================================
 // Filters
@@ -103,12 +119,12 @@ function parseSearch(q) {
 const searchableText = (i) => [i.desc, i.subject, i.tag, i.tags, i.milestone, i.assignee,
     ...(i.notes || []).map(n => n.text)].map(v => String(v || '')).join('\n').toLowerCase();
 
-function filterIssues(issues, filters = {}, me = '') {
+function filterIssues(issues, filters = {}, me = '', subjects = SUBJECTS) {
     const f = normalizeFilters(filters);
     const terms = parseSearch(f.q);
     const any = (arr, v) => !arr.length || arr.includes(v);
     const tagSet = new Set(f.tags.map(t => t.toLowerCase()));
-    const cmp = COMPARATORS[f.sort];
+    const cmp = makeComparators(subjects)[f.sort];
     return issues
         .filter(i => any(f.status, i.status))
         .filter(i => any(f.impact, String(i.impact)))
@@ -185,7 +201,8 @@ function sanitizeIssue(raw) {
         id: typeof i.id === 'string' && /^[\w-]{1,64}$/.test(i.id) ? i.id : newId(),
         tag: typeof i.tag === 'string' && /^BUG-\d{1,8}$/.test(i.tag) ? i.tag : '',
         desc: clip(i.desc, LIMITS.desc),
-        subject: SUBJECTS.includes(i.subject) ? i.subject : SUBJECTS[0],
+        // Any subject the team created is allowed; renamed/deleted ones are migrated in Settings
+        subject: clip(String(i.subject ?? '').trim(), LIMITS.subject) || SUBJECTS[0],
         impact: ['1', '2', '3', '4'].includes(String(i.impact)) ? String(i.impact) : '3',
         points: POINTS.includes(String(i.points)) ? String(i.points) : '',
         milestone: clip(i.milestone, LIMITS.milestone),
@@ -247,29 +264,62 @@ function withHistory(history, by, text, at = Date.now()) {
     return [...(history || []), { at, by: clip(by, LIMITS.text), text: clip(text, LIMITS.text) }].slice(-LIMITS.history);
 }
 
-// Plain-text version of an issue for the Copy button. `nameOf` maps an assignee email to a display name.
-function formatIssueText(issue, nameOf = (e) => e) {
-    const details = [
-        `Status: ${STATUS_LABELS[issue.status] || issue.status}`,
-        issue.milestone && `Milestone: ${issue.milestone}`,
-        issue.points && `Points: ${issue.points}`,
-        issue.assignee && `Assignee: ${nameOf(issue.assignee)}`,
-        parseTags(issue.tags).length && `Tags: ${parseTags(issue.tags).join(', ')}`
-    ].filter(Boolean).join(' | ');
-    const lines = [
-        `${issue.tag || 'NEW'} · ${getImpactLabel(issue.impact)} · ${issue.subject}`,
-        details,
+// ==========================================
+// AI suggestions (Gemini)
+// ctx = { subjects, milestones, tags } — the team's current choices.
+// ==========================================
+function buildCategorizePrompt(desc, ctx = {}) {
+    const subjects = (ctx.subjects && ctx.subjects.length ? ctx.subjects : SUBJECTS).slice(0, LIMITS.subjects);
+    const milestones = (ctx.milestones || []).slice(0, LIMITS.milestones);
+    const tags = (ctx.tags || []).slice(0, 100);
+    const q = (arr) => arr.map(s => JSON.stringify(s)).join(', ');
+    return [
+        'You triage bug reports for a video game team.',
+        `Bug report: ${JSON.stringify(clip(desc, 4000))}`,
         '',
-        String(issue.desc || '').trim()
-    ];
-    if (issue.notes && issue.notes.length) {
-        lines.push('', 'Notes:', ...issue.notes.map(n => `- ${n.date}${n.author ? ' (' + n.author + ')' : ''}: ${n.text}`));
-    }
-    return lines.join('\n');
+        'Return ONLY a JSON object with these keys:',
+        `- "subject": exactly one of [${q(subjects)}]`,
+        '- "impact": "1" (Critical: crash, data loss, blocks play), "2" (High), "3" (Medium) or "4" (Low: cosmetic, typo)',
+        '- "points": story-point estimate of the fix effort, one of "1", "2", "3", "5", "8"',
+        `- "tags": 1 to 4 short lowercase tags. Prefer existing tags: [${q(tags)}]. Only invent a new one if none fit.`,
+        milestones.length
+            ? `- "milestone": one of [${q(milestones)}] if the report clearly belongs to it, otherwise ""`
+            : '- "milestone": ""',
+        'No markdown, no explanation.'
+    ].join('\n');
 }
 
-function buildCategorizePrompt(desc) {
-    return `Analyze this bug report for a video game: "${clip(desc, 4000)}". \nReturn ONLY a JSON object with two keys: "subject" (choose from: ${SUBJECTS.map(s => `"${s}"`).join(', ')}) and "impact" (choose a number 1 to 4, where 1 is Critical, 2 is High, 3 is Medium, 4 is Low). No markdown or extra text.`;
+// Turns the AI's answer into safe form values; anything invalid becomes null.
+function parseAiSuggestion(raw, ctx = {}) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    const subjects = ctx.subjects && ctx.subjects.length ? ctx.subjects : SUBJECTS;
+    const findCI = (list, v) => list.find(x => x.toLowerCase() === String(v ?? '').trim().toLowerCase());
+    const existingTags = ctx.tags || [];
+    const tags = (Array.isArray(r.tags) ? r.tags : parseTags(r.tags))
+        .map(t => String(t ?? '').trim().replace(/,/g, ' ').slice(0, 30)).filter(Boolean)
+        .map(t => findCI(existingTags, t) || t.toLowerCase())
+        .filter((t, k, arr) => arr.indexOf(t) === k)
+        .slice(0, 4);
+    return {
+        subject: findCI(subjects, r.subject) || null,
+        impact: ['1', '2', '3', '4'].includes(String(r.impact)) ? String(r.impact) : null,
+        points: POINTS.includes(String(r.points)) ? String(r.points) : null,
+        tags: tags.length ? tags : null,
+        milestone: findCI(ctx.milestones || [], r.milestone) || null
+    };
+}
+
+// Picks the best available Gemini "flash" model from a models.list response,
+// so the app keeps working when Google retires a model name.
+function pickGeminiModel(models) {
+    const usable = (Array.isArray(models) ? models : [])
+        .filter(m => m && typeof m.name === 'string' && /^models\/gemini-[\d.]+-flash/.test(m.name))
+        .filter(m => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes('generateContent'))
+        .filter(m => !/(tts|image|audio|live|embedding|thinking|exp)/i.test(m.name));
+    const version = (n) => parseFloat((n.match(/gemini-([\d.]+)/) || [])[1]) || 0;
+    const score = (n) => version(n) * 100 - (/lite/.test(n) ? 5 : 0) - (/preview/.test(n) ? 3 : 0) - (/-\d{3,}$/.test(n) ? 1 : 0);
+    usable.sort((a, b) => score(b.name) - score(a.name));
+    return usable.length ? usable[0].name.replace(/^models\//, '') : null;
 }
 
 // Returns an error message, or '' if the file is an acceptable screenshot.
@@ -299,6 +349,7 @@ if (typeof module !== 'undefined') {
         parseTags, normalizeProjectName, filterIssues, FILTER_GROUPS, EMPTY_FILTERS, QUICK_VIEWS,
         normalizeFilters, parseSearch, activeFilterCount, matchingQuickView, filtersToQuery, queryToFilters, tagsOf, progressPct, milestonesOf, formatDate,
         sanitizeIssue, validateImport, describeChanges, withHistory,
-        formatIssueText, buildCategorizePrompt, checkImageFile, parseAiJson, chunk
+        sanitizeConfig, makeComparators, buildCategorizePrompt, parseAiSuggestion, pickGeminiModel,
+        checkImageFile, parseAiJson, chunk
     };
 }

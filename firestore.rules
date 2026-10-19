@@ -25,7 +25,7 @@ service cloud.firestore {
         && d.id == id
         && (d.tag == '' || d.tag.matches('^BUG-[0-9]{1,8}$'))
         && isShortString(d.desc, 20000)
-        && d.subject in ['Gameplay & Balance', 'UI & Navigation', 'Visuals & Juice', 'Technical / Architecture']
+        && isShortString(d.subject, 60) && d.subject.size() > 0
         && d.impact in ['1', '2', '3', '4']
         && d.status in ['open', 'in_progress', 'fixed']
         && (!('points' in d) || d.points in ['', '1', '2', '3', '5', '8'])
@@ -50,6 +50,18 @@ service cloud.firestore {
           && request.resource.data.list is list
           && request.resource.data.list.size() >= 1
           && request.resource.data.list.size() <= 100;
+      }
+
+      // Team-editable subjects and planned milestones (⚙️ Settings)
+      match /meta/config {
+        allow read: if isTeamMember();
+        allow write: if isTeamMember()
+          && request.resource.data.keys().hasOnly(['subjects', 'milestones'])
+          && request.resource.data.subjects is list
+          && request.resource.data.subjects.size() >= 1
+          && request.resource.data.subjects.size() <= 30
+          && request.resource.data.milestones is list
+          && request.resource.data.milestones.size() <= 50;
       }
 
       match /meta/members {

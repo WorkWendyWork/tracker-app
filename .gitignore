@@ -16,3 +16,6 @@ node_modules/
 
 # Local tooling
 .claude/
+
+# Copied from ../lib.js at deploy time
+functions/lib.js
