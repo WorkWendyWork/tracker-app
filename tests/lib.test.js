@@ -49,6 +49,22 @@ test('filterIssues filters and sorts by priority then number', () => {
     assert.deepEqual(lib.filterIssues(issues, { query: 'bug-0002' }).map(i => i.id), ['a']);
 });
 
+test('filterIssues sort options', () => {
+    const issues = [
+        { id: 'a', tag: 'BUG-0003', impact: '2', status: 'open', desc: '', subject: 'Technical / Architecture', updatedAt: 10 },
+        { id: 'b', tag: 'BUG-0001', impact: '3', status: 'open', desc: '', subject: 'Gameplay & Balance', updatedAt: 30 },
+        { id: 'c', tag: 'BUG-0002', impact: '1', status: 'open', desc: '', subject: 'Gameplay & Balance', createdAt: 20 },
+        { id: 'd', tag: '', impact: '1', status: 'open', desc: '', subject: 'UI & Navigation' }
+    ];
+    const ids = (sort) => lib.filterIssues(issues, { sort }).map(i => i.id).join('');
+    assert.equal(ids('priority'), 'cdab');
+    assert.equal(ids('subject'), 'cbda');
+    assert.equal(ids('number'), 'bcad');
+    assert.equal(ids('updated'), 'bcad');
+    assert.equal(ids('bogus'), 'cdab');
+    assert.deepEqual(lib.SORTS, ['priority', 'subject', 'number', 'updated']);
+});
+
 test('progressPct and milestonesOf', () => {
     assert.equal(lib.progressPct([]), 0);
     assert.equal(lib.progressPct([{ status: 'fixed' }, { status: 'open' }, { status: 'open' }]), 33);

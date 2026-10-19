@@ -42,7 +42,25 @@ const parseTags = (tags) => String(tags || '').split(',').map(t => t.trim()).fil
 const normalizeProjectName = (name) => String(name || '').trim().replace(/[^a-zA-Z0-9-_ ]/g, '').slice(0, 60);
 
 // assignee: 'all' | 'mine' | 'none'; `me` is the signed-in email
-function filterIssues(issues, { status = 'all', impact = 'all', milestone = 'all', query = '', assignee = 'all', me = '' } = {}) {
+const SORTS = ['priority', 'subject', 'number', 'updated'];
+
+// Unnumbered (NEW) issues sort after numbered ones
+const byNumber = (a, b) => (bugNum(a) || Number.MAX_SAFE_INTEGER) - (bugNum(b) || Number.MAX_SAFE_INTEGER);
+const byPriority = (a, b) => Number(a.impact) - Number(b.impact);
+const bySubject = (a, b) => {
+    const ia = SUBJECTS.indexOf(a.subject), ib = SUBJECTS.indexOf(b.subject);
+    return (ia < 0 ? SUBJECTS.length : ia) - (ib < 0 ? SUBJECTS.length : ib);
+};
+const byUpdated = (a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+
+const COMPARATORS = {
+    priority: (a, b) => byPriority(a, b) || byNumber(a, b),
+    subject: (a, b) => bySubject(a, b) || byPriority(a, b) || byNumber(a, b),
+    number: byNumber,
+    updated: (a, b) => byUpdated(a, b) || byNumber(a, b)
+};
+
+function filterIssues(issues, { status = 'all', impact = 'all', milestone = 'all', query = '', assignee = 'all', me = '', sort = 'priority' } = {}) {
     const q = String(query).toLowerCase();
     return issues
         .filter(i => status === 'all' || i.status === status)
@@ -50,8 +68,7 @@ function filterIssues(issues, { status = 'all', impact = 'all', milestone = 'all
         .filter(i => milestone === 'all' || i.milestone === milestone)
         .filter(i => assignee === 'all' || (assignee === 'none' ? !i.assignee : (!!me && i.assignee === me)))
         .filter(i => !q || [i.desc, i.subject, i.tag, i.tags, i.milestone, i.assignee].some(f => String(f || '').toLowerCase().includes(q)))
-        // Most urgent first, then oldest bug number first (unnumbered last)
-        .sort((a, b) => (Number(a.impact) - Number(b.impact)) || ((bugNum(a) || Infinity) - (bugNum(b) || Infinity)));
+        .sort(COMPARATORS[sort] || COMPARATORS.priority);
 }
 
 function progressPct(issues) {
@@ -184,7 +201,7 @@ function chunk(arr, size) {
 
 if (typeof module !== 'undefined') {
     module.exports = {
-        STATUSES, STATUS_LABELS, SUBJECTS, POINTS, LIMITS, MAX_IMAGE_BYTES,
+        STATUSES, STATUS_LABELS, SUBJECTS, POINTS, SORTS, LIMITS, MAX_IMAGE_BYTES,
         getImpactLabel, getImpactColor, esc, bugNum, fmtBug, nextBugNumber, newId,
         parseTags, normalizeProjectName, filterIssues, progressPct, milestonesOf, formatDate,
         sanitizeIssue, validateImport, describeChanges, withHistory,

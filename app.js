@@ -636,6 +636,7 @@ function renderIssues() {
         impact: $('filterImpact').value,
         milestone: $('filterMilestone').value,
         assignee: $('filterAssignee').value,
+        sort: $('sortBy').value,
         me: myEmail(),
         query: $('searchBar').value
     });
@@ -1110,9 +1111,14 @@ $('projectSelect').addEventListener('change', (e) => {
 });
 
 ['filterStatus', 'filterImpact', 'filterMilestone', 'filterAssignee'].forEach(id => $(id).addEventListener('change', renderIssues));
+$('sortBy').addEventListener('change', () => {
+    try { localStorage.setItem('sort', $('sortBy').value); } catch (e) {}
+    renderIssues();
+});
 $('searchBar').addEventListener('input', renderIssues);
 
 // --- Initial render ---
 try { if (localStorage.getItem('view') === 'kanban') toggleView(); } catch (e) {}
+try { const s = localStorage.getItem('sort'); if (SORTS.includes(s)) $('sortBy').value = s; } catch (e) {}
 if (!auth) localStore.load();
 else renderIssues();

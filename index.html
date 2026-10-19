@@ -97,6 +97,13 @@
                     <option value="mine">My bugs</option>
                     <option value="none">Unassigned</option>
                 </select>
+                <label for="sortBy" class="sr-only">Sort by</label>
+                <select id="sortBy" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
+                    <option value="priority">Sort: Priority</option>
+                    <option value="subject">Sort: Subject</option>
+                    <option value="number">Sort: Bug number</option>
+                    <option value="updated">Sort: Recently updated</option>
+                </select>
             </div>
             <div class="flex items-center gap-2">
                 <button type="button" data-action="exportData" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Download a JSON backup">⬇️ Export</button>
