@@ -96,9 +96,10 @@ Edit the team's lists. Changes apply to every project:
 - **Tags:** rename to fix typos, merge two tags by giving them the same name, or delete.
 
 ## Search & filters
-- **Search** matches all words across the description, subject, tags, milestone, assignee and notes. Use `"quotes"` for an exact phrase and `-word` to exclude. Press <kbd>/</kbd> to jump to the search box and <kbd>Esc</kbd> to clear it.
+- **Search** matches all words across the description, subject, tags, milestone, assignee and notes. Use `"quotes"` for an exact phrase and `-word` to exclude. Press <kbd>/</kbd> to jump to the search box and <kbd>Esc</kbd> to clear it. Press <kbd>N</kbd> (or the round **+** button) to log a new issue; <kbd>Ctrl</kbd>+<kbd>Enter</kbd> saves it.
 - **🎛️ Filters** opens a panel where you can pick several values per group (Status, Priority, Subject, Story points, Milestone, Assignee, Tags). Values in one group are combined with *or*, groups with *and*. Each option shows how many issues it matches.
 - **Quick views:** All issues, My open, Urgent, Unassigned, Recently fixed.
+- **Hide completed** (next to the quick views) leaves fixed bugs out of the list *and* out of the filter counts, and hides subjects, tags and milestones with nothing left to do. Handy for seeing what still needs work. Picking *Fixed* in the Status filter still shows them.
 - **Sort** by priority, subject, bug number or recently updated; **↓/↑** reverses the order.
 - Filters are kept in the page address, so you can **bookmark or share a link** to an exact view. They're also remembered in your browser.
 

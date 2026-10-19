@@ -126,6 +126,27 @@ test('filters round-trip through the URL', () => {
     assert.deepEqual(lib.queryToFilters('status=hacked&sort=evil').sort, 'priority');
 });
 
+test('hide completed: leaves fixed bugs out of the list and the counts', () => {
+    const issues = [
+        { id: 'a', impact: '1', status: 'open', desc: '', subject: 'Audio', tags: 'sound' },
+        { id: 'b', impact: '1', status: 'fixed', desc: '', subject: 'Audio', tags: 'sound, crash' },
+        { id: 'c', impact: '1', status: 'in_progress', desc: '', subject: 'Menus' },
+        { id: 'd', impact: '1', status: 'fixed', desc: '', subject: 'Pets' }
+    ];
+    const ids = (f) => lib.filterIssues(issues, f).map(i => i.id).join('');
+    assert.equal(ids({}), 'abcd');
+    assert.equal(ids({ hideDone: true }), 'ac');
+    assert.equal(ids({ hideDone: true, status: ['fixed'] }), 'bd');   // explicit choice wins
+    assert.equal(ids({ hideDone: true, subject: ['Pets'] }), '');
+    assert.deepEqual(lib.countBase(issues, { hideDone: true }).map(i => i.id), ['a', 'c']);
+    assert.equal(lib.countBase(issues, {}).length, 4);
+    // remembered in links, and quick views still match
+    assert.equal(lib.queryToFilters('#' + lib.filtersToQuery({ hideDone: true })).hideDone, true);
+    assert.equal(lib.filtersToQuery({ hideDone: true }), 'open=1');
+    assert.equal(lib.matchingQuickView({ hideDone: true }), 'all');
+    assert.equal(lib.activeFilterCount({ hideDone: true }), 0);
+});
+
 test('tagsOf', () => {
     assert.deepEqual(lib.tagsOf([{ tags: 'UI, audio' }, { tags: 'ui, Physics' }, {}]), ['audio', 'Physics', 'UI']);
 });

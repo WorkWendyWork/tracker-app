@@ -83,7 +83,8 @@ function makeComparators(subjects = SUBJECTS) {
 // Assignee uses the special values '@me' and '@none'; points uses 'none'.
 // ==========================================
 const FILTER_GROUPS = ['status', 'impact', 'subject', 'points', 'milestone', 'assignee', 'tags'];
-const EMPTY_FILTERS = Object.freeze({ q: '', status: [], impact: [], subject: [], points: [], milestone: [], assignee: [], tags: [], sort: 'priority', rev: false });
+// hideDone: leave fixed bugs out of the list and the filter counts ("what's left to do")
+const EMPTY_FILTERS = Object.freeze({ q: '', status: [], impact: [], subject: [], points: [], milestone: [], assignee: [], tags: [], sort: 'priority', rev: false, hideDone: false });
 
 const QUICK_VIEWS = {
     all: { label: 'All issues', filters: {} },
@@ -95,7 +96,7 @@ const QUICK_VIEWS = {
 
 function normalizeFilters(raw) {
     const r = raw && typeof raw === 'object' ? raw : {};
-    const f = { q: clip(r.q, 200), sort: SORTS.includes(r.sort) ? r.sort : 'priority', rev: r.rev === true || r.rev === '1' };
+    const f = { q: clip(r.q, 200), sort: SORTS.includes(r.sort) ? r.sort : 'priority', rev: r.rev === true || r.rev === '1', hideDone: r.hideDone === true || r.hideDone === '1' };
     FILTER_GROUPS.forEach(k => {
         const v = Array.isArray(r[k]) ? r[k] : (r[k] == null || r[k] === '' ? [] : [r[k]]);
         f[k] = [...new Set(v.map(x => clip(x, LIMITS.text)).filter(Boolean))];
@@ -126,6 +127,8 @@ function filterIssues(issues, filters = {}, me = '', subjects = SUBJECTS) {
     const tagSet = new Set(f.tags.map(t => t.toLowerCase()));
     const cmp = makeComparators(subjects)[f.sort];
     return issues
+        // Picking "Fixed" in the status filter wins over hiding completed bugs
+        .filter(i => !f.hideDone || i.status !== 'fixed' || f.status.includes('fixed'))
         .filter(i => any(f.status, i.status))
         .filter(i => any(f.impact, String(i.impact)))
         .filter(i => any(f.subject, i.subject))
@@ -147,10 +150,13 @@ const activeFilterCount = (filters) => {
     return FILTER_GROUPS.filter(k => f[k].length).length + (f.q.trim() ? 1 : 0);
 };
 
+// The bugs filter counts are based on: all, or only unfinished ones when hiding completed.
+const countBase = (issues, filters) => normalizeFilters(filters).hideDone ? issues.filter(i => i.status !== 'fixed') : issues;
+
 // Which quick view (if any) the filters exactly match, ignoring the search box.
 function matchingQuickView(filters) {
     const f = normalizeFilters(filters);
-    const key = (x) => JSON.stringify({ ...normalizeFilters(x), q: '' });
+    const key = (x) => JSON.stringify({ ...normalizeFilters(x), q: '', hideDone: false });
     const target = key(f);
     return Object.keys(QUICK_VIEWS).find(k => key(QUICK_VIEWS[k].filters) === target) || '';
 }
@@ -163,12 +169,13 @@ function filtersToQuery(filters) {
     FILTER_GROUPS.forEach(k => f[k].forEach(v => p.append(k, v)));
     if (f.sort !== 'priority') p.set('sort', f.sort);
     if (f.rev) p.set('rev', '1');
+    if (f.hideDone) p.set('open', '1');
     return p.toString();
 }
 
 function queryToFilters(query) {
     const p = new URLSearchParams(String(query || '').replace(/^[#?]/, ''));
-    const raw = { q: p.get('q') || '', sort: p.get('sort') || 'priority', rev: p.get('rev') === '1' };
+    const raw = { q: p.get('q') || '', sort: p.get('sort') || 'priority', rev: p.get('rev') === '1', hideDone: p.get('open') === '1' };
     FILTER_GROUPS.forEach(k => { raw[k] = p.getAll(k); });
     return normalizeFilters(raw);
 }
@@ -428,7 +435,7 @@ if (typeof module !== 'undefined') {
         STATUSES, STATUS_LABELS, SUBJECTS, POINTS, SORTS, LIMITS, MAX_IMAGE_BYTES,
         getImpactLabel, getImpactColor, esc, bugNum, fmtBug, nextBugNumber, newId,
         parseTags, normalizeProjectName, filterIssues, FILTER_GROUPS, EMPTY_FILTERS, QUICK_VIEWS,
-        normalizeFilters, parseSearch, activeFilterCount, matchingQuickView, filtersToQuery, queryToFilters, tagsOf, progressPct, milestonesOf, formatDate,
+        normalizeFilters, parseSearch, countBase, activeFilterCount, matchingQuickView, filtersToQuery, queryToFilters, tagsOf, progressPct, milestonesOf, formatDate,
         sanitizeIssue, validateImport, describeChanges, withHistory,
         sanitizeConfig, makeComparators, buildCategorizePrompt, parseAiSuggestion, pickGeminiModel,
         isSingleSubject, cleanSubjectName, ORGANIZE_BATCH, ORGANIZE_SAMPLE, organizeText,

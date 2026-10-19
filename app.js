@@ -622,10 +622,27 @@ function updateMilestoneList() {
     $('milestoneList').innerHTML = all.map(m => `<option value="${esc(m)}"></option>`).join('');
 }
 
+// Subjects offered in the form: the team list first, then any other
+// single-topic subject a bug uses (e.g. after an import or a teammate's AI pick).
+// Old combined subjects ("X & Y") are hidden once no bug here uses them.
+function subjectChoices() {
+    const used = new Set(issues.map(i => i.subject.toLowerCase()));
+    const listed = config.subjects.filter(s => isSingleSubject(s) || used.has(s.toLowerCase()));
+    const known = new Set(listed.map(s => s.toLowerCase()));
+    const extra = [...new Set(issues.map(i => i.subject))]
+        .filter(s => isSingleSubject(s) && !known.has(s.toLowerCase()))
+        .sort((a, b) => a.localeCompare(b));
+    const all = [...listed, ...extra];
+    return all.length ? all : [...SUBJECTS];
+}
+
 function updateSubjectOptions() {
     const sel = $('subject');
     const cur = sel.value;
-    sel.innerHTML = config.subjects.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    const choices = subjectChoices();
+    // Rebuild only when the list changed, so an open form keeps its state
+    if ([...sel.options].map(o => o.value).join('\n') === choices.join('\n')) return;
+    sel.innerHTML = choices.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
     if (cur) { ensureSubjectOption(cur); sel.value = cur; }
 }
 
@@ -972,7 +989,9 @@ function toggleFilterValue(key, value) {
 
 // Options for each filter group, with counts across the whole project.
 function filterGroups() {
-    const count = (pred) => issues.filter(pred).length;
+    // With "Hide completed" on, counts only include bugs that still need work
+    const base = countBase(issues, filters);
+    const count = (pred) => base.filter(pred).length;
     const withSelected = (key, opts) => {
         // Keep selected values visible even if no issue has them any more
         const known = new Set(opts.map(o => o[0]));
@@ -986,13 +1005,19 @@ function filterGroups() {
     const groups = [
         { key: 'status', label: 'Status', opts: STATUSES.map(s => [s, STATUS_LABELS[s]]), test: v => i => i.status === v },
         { key: 'impact', label: 'Priority', opts: ['1', '2', '3', '4'].map(v => [v, getImpactLabel(v)]), test: v => i => String(i.impact) === v },
-        { key: 'subject', label: 'Subject', opts: [...new Set([...config.subjects, ...issues.map(i => i.subject)])].map(s => [s, s]), test: v => i => i.subject === v },
+        { key: 'subject', label: 'Subject', opts: [...new Set([...subjectChoices(), ...issues.map(i => i.subject)])].map(s => [s, s]), test: v => i => i.subject === v },
         { key: 'points', label: 'Story points', opts: [['none', 'None'], ...POINTS.map(p => [p, `${p} pt${p === '1' ? '' : 's'}`])], test: v => i => (i.points || 'none') === v },
         { key: 'milestone', label: 'Milestone', opts: milestonesOf(issues).map(m => [m, m]), test: v => i => i.milestone === v },
         { key: 'assignee', label: 'Assignee', opts: assigneeOpts, test: v => i => v === '@me' ? i.assignee === myEmail() : v === '@none' ? !i.assignee : i.assignee === v },
         { key: 'tags', label: 'Tags', opts: tagsOf(issues).map(t => [t, t]), test: v => i => parseTags(i.tags).some(t => t.toLowerCase() === v.toLowerCase()) }
     ];
-    return groups.map(g => ({ ...g, opts: withSelected(g.key, g.opts).map(([value, label]) => ({ value, label, n: count(g.test(value)) })) }));
+    return groups.map(g => ({
+        ...g,
+        opts: withSelected(g.key, g.opts)
+            .map(([value, label]) => ({ value, label, n: count(g.test(value)) }))
+            // Hide options with nothing left to do (keep selected ones and the status group)
+            .filter(o => !filters.hideDone || g.key === 'status' || o.n > 0 || filters[g.key].includes(o.value))
+    }));
 }
 
 const chipCls = (on) => `text-xs px-2.5 py-1 rounded-full border transition ${on
@@ -1023,7 +1048,16 @@ function renderFilterUI(shown) {
     $('quickViews').innerHTML = Object.entries(QUICK_VIEWS)
         .filter(([k]) => k !== 'mine' || isOnline())
         .map(([k, v]) => `<button type="button" data-action="quickView" data-view="${k}" aria-pressed="${activeView === k}" class="${chipCls(activeView === k)}">${esc(v.label)}</button>`)
-        .join('');
+        .join('') +
+        `<span class="mx-1 w-px self-stretch bg-gray-300 dark:bg-gray-600" aria-hidden="true"></span>
+        <button type="button" data-action="toggleHideDone" role="switch" aria-checked="${filters.hideDone}"
+            title="Leave fixed bugs out of the list and the filter counts"
+            class="text-xs px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 ${filters.hideDone
+                ? 'bg-green-600 border-green-600 text-white hover:bg-green-500'
+                : 'bg-gray-100 dark:bg-gray-900 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-green-500'}">
+            <span aria-hidden="true">${filters.hideDone ? '✔' : '○'}</span> Hide completed
+            <span class="opacity-75">(${issues.filter(i => i.status === 'fixed').length})</span>
+        </button>`;
 
     // Panel: one group of toggle chips per filter
     if (filterPanelOpen) {
@@ -1138,6 +1172,7 @@ function renderIssues() {
     updateBulkActionBar();
 
     updateMilestoneList();
+    updateSubjectOptions(); // new subjects from teammates or imports show up immediately
     const filtered = filterIssues(issues, filters, myEmail(), config.subjects);
     renderFilterUI(filtered.length);
 
@@ -1167,11 +1202,28 @@ function renderIssues() {
 // ==========================================
 // Issue form
 // ==========================================
-function showForm(show) {
-    $('formPanel').classList.toggle('hidden', !show);
-    $('newIssueBtn').setAttribute('aria-expanded', String(show));
-    $('newIssueBtn').innerText = show ? '✖ Close form' : '➕ New Issue';
+// The form lives in an overlay (#issueModal), opened by the + button or Edit.
+let formDirty = false;
+$('issueForm').addEventListener('input', () => { formDirty = true; });
+$('issueForm').addEventListener('change', () => { formDirty = true; });
+
+function openIssueForm() {
+    clearForm();
+    updateSubjectOptions();
+    openModal('issueModal', 'desc');
 }
+
+// Closing asks first if something was typed and not saved.
+function closeIssueForm() {
+    if (formDirty && !confirm('Discard your unsaved changes?')) return;
+    clearForm();
+    closeModals();
+}
+
+// Ctrl/Cmd+Enter saves from anywhere in the form
+$('issueForm').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('issueForm').requestSubmit(); }
+});
 
 $('issueForm').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1185,10 +1237,12 @@ $('issueForm').addEventListener('submit', (e) => {
         assignee: $('assignee').value,
         tags: $('tags').value
     };
+    if (!fields.desc.trim()) return $('desc').focus();
     // Only subjects the AI proposed in this form get added to the team list
     if (aiNewSubjects.has(fields.subject)) adoptSubject(fields.subject);
     aiNewSubjects.clear();
     clearForm();
+    closeModals();
     if (id) {
         store().update(id, fields);
     } else {
@@ -1196,12 +1250,13 @@ $('issueForm').addEventListener('submit', (e) => {
         issue.history = withHistory([], who(), 'created');
         store().create(issue);
     }
-    if (window.matchMedia('(max-width: 1279px)').matches) showForm(false);
 });
 
 function editIssue(id) {
     const issue = issues.find(i => i.id === id);
     if (!issue) return;
+    clearForm();
+    updateSubjectOptions();
     $('editId').value = issue.id;
     $('desc').value = issue.desc;
     ensureSubjectOption(issue.subject);
@@ -1214,10 +1269,7 @@ function editIssue(id) {
 
     $('formTitle').innerText = `Editing ${issue.tag || 'Issue'}`;
     $('submitBtn').innerText = "Update Issue";
-    $('cancelEditBtn').classList.remove('hidden');
-    showForm(true);
-    $('formPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    $('desc').focus({ preventScroll: true });
+    openModal('issueModal', 'desc');
 }
 
 function clearForm() {
@@ -1225,7 +1277,8 @@ function clearForm() {
     $('editId').value = "";
     $('formTitle').innerText = "Log Issue";
     $('submitBtn').innerText = "Save Issue";
-    $('cancelEditBtn').classList.add('hidden');
+    aiNewSubjects.clear();
+    formDirty = false;
 }
 
 function updateStatus(id, newStatus) {
@@ -1344,6 +1397,8 @@ function toggleSelection(id) {
 function updateBulkActionBar() {
     $('bulkCount').innerText = selectedIssues.size;
     $('bulkActionBar').classList.toggle('translate-y-full', selectedIssues.size === 0);
+    $('newIssueFab').classList.toggle('bottom-24', selectedIssues.size > 0);
+    $('newIssueFab').classList.toggle('bottom-5', selectedIssues.size === 0);
 }
 
 function clearSelection() {
@@ -1572,7 +1627,7 @@ function closeModals() {
 document.addEventListener('keydown', (e) => {
     const modal = openModalEl();
     if (!modal) return;
-    if (e.key === 'Escape') { e.preventDefault(); closeModals(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); modal.id === 'issueModal' ? closeIssueForm() : closeModals(); return; }
     if (e.key !== 'Tab') return;
     const focusables = [...modal.querySelectorAll('button, input, textarea, select, [href]')].filter(el => !el.disabled && el.offsetParent !== null);
     if (!focusables.length) return;
@@ -1583,7 +1638,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Click on the dark backdrop closes the modal
-document.querySelectorAll('[role="dialog"]').forEach(m => m.addEventListener('mousedown', (e) => { if (e.target === m) closeModals(); }));
+document.querySelectorAll('[role="dialog"]').forEach(m => m.addEventListener('mousedown', (e) => {
+    if (e.target !== m) return;
+    if (m.id === 'issueModal') closeIssueForm(); else closeModals();
+}));
 
 function openProjectModal(mode) {
     projectModalMode = mode;
@@ -1668,8 +1726,8 @@ const actions = {
     exportData: () => exportData(),
     pickImport: () => $('importFile').click(),
     toggleView: () => toggleView(),
-    toggleForm: () => showForm($('formPanel').classList.contains('hidden')),
-    cancelForm: () => { clearForm(); if (window.matchMedia('(max-width: 1279px)').matches) showForm(false); },
+    newIssue: () => openIssueForm(),
+    closeIssueForm: () => closeIssueForm(),
     pickImage: () => $('imageFile').click(),
     autoCategorize: () => autoCategorize(),
     bulkUpdateStatus: (el) => bulkUpdateStatus(el.dataset.status),
@@ -1685,8 +1743,9 @@ const actions = {
     toggleFilters: () => { filterPanelOpen = !filterPanelOpen; try { localStorage.setItem('filterPanel', filterPanelOpen ? '1' : ''); } catch (e) {} renderIssues(); },
     toggleFilter: (el) => toggleFilterValue(el.dataset.key, el.dataset.value),
     removeFilter: (el) => el.dataset.key === 'q' ? setFilters({ ...filters, q: '' }) : toggleFilterValue(el.dataset.key, el.dataset.value),
-    clearFilters: () => setFilters({ ...EMPTY_FILTERS, sort: filters.sort, rev: filters.rev }),
-    quickView: (el) => setFilters({ ...QUICK_VIEWS[el.dataset.view].filters, q: filters.q }),
+    clearFilters: () => setFilters({ ...EMPTY_FILTERS, sort: filters.sort, rev: filters.rev, hideDone: filters.hideDone }),
+    quickView: (el) => setFilters({ ...QUICK_VIEWS[el.dataset.view].filters, q: filters.q, hideDone: filters.hideDone }),
+    toggleHideDone: () => setFilters({ ...filters, hideDone: !filters.hideDone }),
     toggleSortDir: () => setFilters({ ...filters, rev: !filters.rev }),
     forgetGeminiKey: () => { try { localStorage.removeItem('gemini_api_key'); } catch (e) {} toast('Gemini key removed from this browser.'); }
 };
@@ -1719,12 +1778,12 @@ $('searchBar').addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $('searchBar').value) { e.preventDefault(); setFilters({ ...filters, q: '' }); }
 });
 
-// "/" focuses search (like many web apps), unless you're typing somewhere
+// Shortcuts (unless you're typing somewhere): "/" focuses search, "n" opens a new issue
 document.addEventListener('keydown', (e) => {
-    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || openModalEl()) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || openModalEl()) return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
-    e.preventDefault();
-    $('searchBar').focus();
+    if (e.key === '/') { e.preventDefault(); $('searchBar').focus(); }
+    else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); openIssueForm(); }
 });
 
 // --- Initial render ---
