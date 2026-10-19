@@ -19,3 +19,6 @@ node_modules/
 
 # Copied from ../lib.js at deploy time
 functions/lib.js
+
+# Local triage notes (contain backlog details)
+TRIAGE_SUMMARY.md

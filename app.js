@@ -1631,6 +1631,15 @@ $('importFile').addEventListener('change', (event) => {
         let next = nextBugNumber(imported);
         imported.forEach(i => { if (!i.tag) i.tag = fmtBug(next++); });
         await store().replaceAll(imported);
+        // Make the file's subjects and milestones selectable; drop combined
+        // ("X & Y") subjects that the imported bugs no longer use.
+        const used = new Set(imported.map(i => i.subject.toLowerCase()));
+        const fresh = [...new Set(imported.map(i => i.subject))].filter(isSingleSubject);
+        const kept = config.subjects.filter(s => isSingleSubject(s) || used.has(s.toLowerCase()));
+        await store().saveConfig(sanitizeConfig({
+            subjects: [...kept, ...fresh],
+            milestones: [...config.milestones, ...milestonesOf(imported)]
+        }));
         toast("Data restored successfully!");
     };
     reader.readAsText(file);
