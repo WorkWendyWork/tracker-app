@@ -68,6 +68,74 @@ test('sanitizeIssue fills defaults and rejects bad values', () => {
     assert.equal('evil' in i, false);
 });
 
+test('sanitizeIssue enforces the same limits as firestore.rules', () => {
+    const i = lib.sanitizeIssue({
+        id: 'ok-id_1', tag: 'BUG-0001x', desc: 'x'.repeat(30000), milestone: 'm'.repeat(100), tags: 't'.repeat(400),
+        points: '13', notes: Array(300).fill({ text: 'n'.repeat(3000) }), history: Array(80).fill({ text: 'h', at: 1 })
+    });
+    assert.equal(i.id, 'ok-id_1');
+    assert.equal(i.tag, '');
+    assert.equal(i.desc.length, lib.LIMITS.desc);
+    assert.equal(i.milestone.length, lib.LIMITS.milestone);
+    assert.equal(i.tags.length, lib.LIMITS.tags);
+    assert.equal(i.points, '');
+    assert.equal(i.notes.length, lib.LIMITS.notes);
+    assert.equal(i.notes[0].text.length, lib.LIMITS.note);
+    assert.equal(i.history.length, lib.LIMITS.history);
+});
+
+test('filterIssues by assignee', () => {
+    const issues = [
+        { id: 'a', impact: '1', status: 'open', desc: '', assignee: 'me@x.com' },
+        { id: 'b', impact: '1', status: 'open', desc: '', assignee: 'you@x.com' },
+        { id: 'c', impact: '1', status: 'open', desc: '' }
+    ];
+    assert.deepEqual(lib.filterIssues(issues, { assignee: 'mine', me: 'me@x.com' }).map(i => i.id), ['a']);
+    assert.deepEqual(lib.filterIssues(issues, { assignee: 'mine', me: '' }).map(i => i.id), []);
+    assert.deepEqual(lib.filterIssues(issues, { assignee: 'none' }).map(i => i.id), ['c']);
+});
+
+test('describeChanges and withHistory', () => {
+    const before = { status: 'open', impact: '3', desc: 'a', assignee: '' };
+    assert.equal(lib.describeChanges(before, { status: 'fixed' }), 'status → Fixed');
+    assert.equal(lib.describeChanges(before, { impact: '1', desc: 'b' }), 'priority → Critical, description edited');
+    assert.equal(lib.describeChanges(before, { assignee: 'x@y.z' }), 'assigned → x@y.z');
+    assert.equal(lib.describeChanges(before, { status: 'open', desc: 'a' }), '');
+    assert.deepEqual(lib.withHistory([], 'Ann', ''), []);
+    const h = lib.withHistory([], 'Ann', 'created', 5);
+    assert.deepEqual(h, [{ at: 5, by: 'Ann', text: 'created' }]);
+    let long = [];
+    for (let k = 0; k < 60; k++) long = lib.withHistory(long, 'A', 'e' + k);
+    assert.equal(long.length, lib.LIMITS.history);
+    assert.equal(long[long.length - 1].text, 'e59');
+});
+
+test('settings and prompts', () => {
+    assert.deepEqual(lib.sanitizeSettings(null), lib.DEFAULT_SETTINGS);
+    const s = lib.sanitizeSettings({ engine: ' Godot ', genre: 'platformer', language: 'GDScript', admin: true });
+    assert.deepEqual(s, { engine: 'Godot', genre: 'platformer', language: 'GDScript' });
+    const p = lib.buildClaudePrompt(s, { subject: 'UI & Navigation', impact: '2', desc: 'Menu breaks' });
+    assert.match(p, /Godot platformer/);
+    assert.match(p, /Godot GDScript/);
+    assert.match(p, /High/);
+    assert.match(p, /Menu breaks/);
+    assert.match(lib.buildCategorizePrompt('x'.repeat(10000)), /^Analyze/);
+    assert.ok(lib.buildCategorizePrompt('x'.repeat(10000)).length < 5000);
+});
+
+test('checkImageFile', () => {
+    assert.equal(lib.checkImageFile({ type: 'image/png', size: 1000 }), '');
+    assert.match(lib.checkImageFile({ type: 'image/svg+xml', size: 10 }), /Only/);
+    assert.match(lib.checkImageFile({ type: 'image/jpeg', size: lib.MAX_IMAGE_BYTES + 1 }), /5 MB/);
+    assert.match(lib.checkImageFile(null), /No file/);
+});
+
+test('validateImport clears duplicate bug numbers', () => {
+    const out = lib.validateImport([{ id: 'a', desc: 'x', tag: 'BUG-0001' }, { id: 'b', desc: 'y', tag: 'BUG-0001' }]);
+    assert.equal(out[0].tag, 'BUG-0001');
+    assert.equal(out[1].tag, '');
+});
+
 test('validateImport accepts backups and rejects junk', () => {
     assert.equal(lib.validateImport({}), null);
     assert.equal(lib.validateImport([{ nope: 1 }]), null);

@@ -23,3 +23,19 @@ jobs:
         run: |
           npm run build:css
           git diff --exit-code tailwind.css || (echo "::error::tailwind.css is stale. Run 'npm run build:css' and commit it." && exit 1)
+
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - name: Firestore rules tests (emulator)
+        run: npm run test:rules

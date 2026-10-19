@@ -1,0 +1,27 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Keep this list the same as in firestore.rules.
+    function isTeamMember() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in [
+          'your-email@example.com'
+        ];
+    }
+
+    // Screenshots attached to issues: images only, max 5 MB, never overwritten.
+    match /workspaces/{workspace}/images/{file} {
+      allow read: if isTeamMember();
+      allow create: if isTeamMember()
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(png|jpeg|gif|webp)');
+      allow delete: if isTeamMember();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

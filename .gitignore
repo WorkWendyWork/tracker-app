@@ -9,6 +9,7 @@ desktop.ini
 tracker_backup_*.json
 .env
 .env.*
+!.env.example
 *.log
 node_modules/
 .firebase/

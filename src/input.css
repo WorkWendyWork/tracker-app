@@ -1,3 +1,26 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+
+/* Rendered Markdown inside issue cards */
+.markdown-prose p { margin-bottom: 0.5rem; }
+.markdown-prose ul { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 0.5rem; }
+.markdown-prose ol { list-style-type: decimal; margin-left: 1.5rem; margin-bottom: 0.5rem; }
+.markdown-prose pre { background: #1f2937; color: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; overflow-x: auto; margin-bottom: 0.5rem; }
+.markdown-prose code { font-size: 0.85em; }
+.markdown-prose a { color: #3b82f6; text-decoration: underline; }
+.markdown-prose img { max-width: 100%; border-radius: 0.25rem; }
+
+.drag-over { border: 2px dashed #3b82f6 !important; background-color: rgba(59, 130, 246, 0.1) !important; }
+
+/* Visible keyboard focus everywhere */
+:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}

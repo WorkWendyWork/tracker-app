@@ -2,7 +2,15 @@
 // Nothing in here touches the DOM or Firebase.
 
 const STATUSES = ['open', 'in_progress', 'fixed'];
+const STATUS_LABELS = { open: 'Open', in_progress: 'In Progress', fixed: 'Fixed' };
 const SUBJECTS = ['Gameplay & Balance', 'UI & Navigation', 'Visuals & Juice', 'Technical / Architecture'];
+const POINTS = ['1', '2', '3', '5', '8'];
+
+// Keep in sync with validIssue() in firestore.rules
+const LIMITS = { desc: 20000, milestone: 60, tags: 300, note: 2000, notes: 200, history: 50, text: 200 };
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+const DEFAULT_SETTINGS = { engine: 'Unity', genre: 'idle/incremental game', language: 'C#' };
 
 const IMPACT_LABELS = { '1': 'Critical', '2': 'High', '3': 'Medium', '4': 'Low' };
 const IMPACT_COLORS = {
@@ -13,6 +21,8 @@ const IMPACT_COLORS = {
 };
 const getImpactLabel = (val) => IMPACT_LABELS[String(val)] || 'Unknown';
 const getImpactColor = (val) => IMPACT_COLORS[String(val)] || IMPACT_COLORS['4'];
+
+const clip = (v, n) => String(v ?? '').slice(0, n);
 
 // Escape user text before putting it into HTML
 function esc(v) {
@@ -33,15 +43,17 @@ const parseTags = (tags) => String(tags || '').split(',').map(t => t.trim()).fil
 // Project names become Firestore document ids, so keep them simple.
 const normalizeProjectName = (name) => String(name || '').trim().replace(/[^a-zA-Z0-9-_ ]/g, '').slice(0, 60);
 
-function filterIssues(issues, { status = 'all', impact = 'all', milestone = 'all', query = '' } = {}) {
+// assignee: 'all' | 'mine' | 'none'; `me` is the signed-in email
+function filterIssues(issues, { status = 'all', impact = 'all', milestone = 'all', query = '', assignee = 'all', me = '' } = {}) {
     const q = String(query).toLowerCase();
     return issues
         .filter(i => status === 'all' || i.status === status)
         .filter(i => impact === 'all' || String(i.impact) === String(impact))
         .filter(i => milestone === 'all' || i.milestone === milestone)
-        .filter(i => !q || [i.desc, i.subject, i.tag, i.tags, i.milestone].some(f => String(f || '').toLowerCase().includes(q)))
-        // Most urgent first, then oldest bug number first
-        .sort((a, b) => (Number(a.impact) - Number(b.impact)) || (bugNum(a) - bugNum(b)));
+        .filter(i => assignee === 'all' || (assignee === 'none' ? !i.assignee : (!!me && i.assignee === me)))
+        .filter(i => !q || [i.desc, i.subject, i.tag, i.tags, i.milestone, i.assignee].some(f => String(f || '').toLowerCase().includes(q)))
+        // Most urgent first, then oldest bug number first (unnumbered last)
+        .sort((a, b) => (Number(a.impact) - Number(b.impact)) || ((bugNum(a) || Infinity) - (bugNum(b) || Infinity)));
 }
 
 function progressPct(issues) {
@@ -58,27 +70,36 @@ function formatDate(ms) {
 
 // Fills in defaults and drops anything unexpected, so imported or legacy
 // data can never break rendering or smuggle extra fields into the database.
+// The output must always pass validIssue() in firestore.rules.
 function sanitizeIssue(raw) {
     const i = raw && typeof raw === 'object' ? raw : {};
     return {
-        id: typeof i.id === 'string' && i.id && !i.id.includes('/') ? i.id : newId(),
-        tag: typeof i.tag === 'string' ? i.tag : '',
-        desc: String(i.desc ?? ''),
+        id: typeof i.id === 'string' && /^[\w-]{1,64}$/.test(i.id) ? i.id : newId(),
+        tag: typeof i.tag === 'string' && /^BUG-\d{1,8}$/.test(i.tag) ? i.tag : '',
+        desc: clip(i.desc, LIMITS.desc),
         subject: SUBJECTS.includes(i.subject) ? i.subject : SUBJECTS[0],
         impact: ['1', '2', '3', '4'].includes(String(i.impact)) ? String(i.impact) : '3',
-        points: String(i.points ?? ''),
-        milestone: String(i.milestone ?? ''),
-        tags: String(i.tags ?? ''),
+        points: POINTS.includes(String(i.points)) ? String(i.points) : '',
+        milestone: clip(i.milestone, LIMITS.milestone),
+        tags: clip(i.tags, LIMITS.tags),
+        assignee: clip(i.assignee, LIMITS.text),
         status: STATUSES.includes(i.status) ? i.status : 'open',
-        notes: Array.isArray(i.notes) ? i.notes.filter(n => n && typeof n === 'object').map(n => ({
-            id: typeof n.id === 'string' ? n.id : newId(),
-            text: String(n.text ?? ''),
-            date: String(n.date ?? ''),
-            author: String(n.author ?? '')
+        notes: Array.isArray(i.notes) ? i.notes.filter(n => n && typeof n === 'object').slice(-LIMITS.notes).map(n => ({
+            id: typeof n.id === 'string' && n.id ? clip(n.id, 64) : newId(),
+            text: clip(n.text, LIMITS.note),
+            date: clip(n.date, 40),
+            author: clip(n.author, LIMITS.text),
+            edited: n.edited === true
         })) : [],
-        createdBy: String(i.createdBy ?? ''),
+        history: Array.isArray(i.history) ? i.history.filter(h => h && typeof h === 'object').slice(-LIMITS.history).map(h => ({
+            at: Number(h.at) || 0,
+            by: clip(h.by, LIMITS.text),
+            text: clip(h.text, LIMITS.text)
+        })) : [],
+        createdBy: clip(i.createdBy, LIMITS.text),
+        createdByUid: clip(i.createdByUid, 128),
         createdAt: Number(i.createdAt) || 0,
-        updatedBy: String(i.updatedBy ?? ''),
+        updatedBy: clip(i.updatedBy, LIMITS.text),
         updatedAt: Number(i.updatedAt) || 0
     };
 }
@@ -88,11 +109,60 @@ function validateImport(data) {
     if (!Array.isArray(data)) return null;
     if (!data.every(i => i && typeof i === 'object' && typeof i.desc === 'string')) return null;
     const seen = new Set();
+    const tags = new Set();
     return data.map(sanitizeIssue).map(i => {
         if (seen.has(i.id)) i.id = newId();
         seen.add(i.id);
+        if (tags.has(i.tag)) i.tag = ''; // duplicate numbers get renumbered
+        if (i.tag) tags.add(i.tag);
         return i;
     });
+}
+
+// Human-readable summary of what an edit changed, for the issue history.
+function describeChanges(before, after) {
+    const out = [];
+    if (after.status !== undefined && after.status !== before.status) out.push(`status → ${STATUS_LABELS[after.status] || after.status}`);
+    if (after.impact !== undefined && String(after.impact) !== String(before.impact)) out.push(`priority → ${getImpactLabel(after.impact)}`);
+    if (after.assignee !== undefined && after.assignee !== (before.assignee || '')) out.push(after.assignee ? `assigned → ${after.assignee}` : 'unassigned');
+    if (after.subject !== undefined && after.subject !== before.subject) out.push(`subject → ${after.subject}`);
+    if (after.milestone !== undefined && after.milestone !== (before.milestone || '')) out.push(`milestone → ${after.milestone || 'none'}`);
+    if (after.points !== undefined && String(after.points) !== String(before.points || '')) out.push(`points → ${after.points || 'none'}`);
+    if (after.tags !== undefined && after.tags !== (before.tags || '')) out.push('tags edited');
+    if (after.desc !== undefined && after.desc !== before.desc) out.push('description edited');
+    return clip(out.join(', '), LIMITS.text);
+}
+
+// Returns a new history array with the entry appended (capped).
+function withHistory(history, by, text, at = Date.now()) {
+    if (!text) return history || [];
+    return [...(history || []), { at, by: clip(by, LIMITS.text), text: clip(text, LIMITS.text) }].slice(-LIMITS.history);
+}
+
+function sanitizeSettings(raw) {
+    const s = raw && typeof raw === 'object' ? raw : {};
+    return {
+        engine: clip(s.engine, 60).trim() || DEFAULT_SETTINGS.engine,
+        genre: clip(s.genre, 100).trim() || DEFAULT_SETTINGS.genre,
+        language: clip(s.language, 40).trim() || DEFAULT_SETTINGS.language
+    };
+}
+
+function buildClaudePrompt(settings, issue) {
+    const s = sanitizeSettings(settings);
+    return `I am a game developer working on a ${s.engine} ${s.genre}. I need help fixing this issue from my backlog:\n\n**Subject:** ${issue.subject}\n**Priority:** ${getImpactLabel(issue.impact)}\n**Issue Description:**\n${issue.desc}\n\nCan you analyze this issue, suggest potential architectural or code solutions in ${s.engine} ${s.language}, and give me a step-by-step approach to fixing it?`;
+}
+
+function buildCategorizePrompt(desc) {
+    return `Analyze this bug report for a video game: "${clip(desc, 4000)}". \nReturn ONLY a JSON object with two keys: "subject" (choose from: ${SUBJECTS.map(s => `"${s}"`).join(', ')}) and "impact" (choose a number 1 to 4, where 1 is Critical, 2 is High, 3 is Medium, 4 is Low). No markdown or extra text.`;
+}
+
+// Returns an error message, or '' if the file is an acceptable screenshot.
+function checkImageFile(file) {
+    if (!file) return 'No file selected.';
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return 'Only PNG, JPEG, GIF or WebP images are allowed.';
+    if (file.size > MAX_IMAGE_BYTES) return 'Images must be 5 MB or smaller.';
+    return '';
 }
 
 // Gemini sometimes wraps its JSON in a ``` fence.
@@ -109,8 +179,10 @@ function chunk(arr, size) {
 
 if (typeof module !== 'undefined') {
     module.exports = {
-        STATUSES, SUBJECTS, getImpactLabel, getImpactColor, esc, bugNum, fmtBug, nextBugNumber, newId,
+        STATUSES, STATUS_LABELS, SUBJECTS, POINTS, LIMITS, MAX_IMAGE_BYTES, DEFAULT_SETTINGS,
+        getImpactLabel, getImpactColor, esc, bugNum, fmtBug, nextBugNumber, newId,
         parseTags, normalizeProjectName, filterIssues, progressPct, milestonesOf, formatDate,
-        sanitizeIssue, validateImport, parseAiJson, chunk
+        sanitizeIssue, validateImport, describeChanges, withHistory, sanitizeSettings,
+        buildClaudePrompt, buildCategorizePrompt, checkImageFile, parseAiJson, chunk
     };
 }

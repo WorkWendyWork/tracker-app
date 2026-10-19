@@ -3,63 +3,66 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Content Security Policy: only these sources may run code or receive data.
+         No inline scripts or event handlers are allowed, so injected HTML cannot run. -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self' https://cdn.jsdelivr.net https://www.gstatic.com https://apis.google.com;
+        style-src 'self';
+        img-src 'self' https: data: blob:;
+        connect-src 'self' https://*.googleapis.com https://*.cloudfunctions.net https://*.firebaseio.com wss://*.firebaseio.com https://firebasestorage.googleapis.com;
+        frame-src https://*.firebaseapp.com https://accounts.google.com https://apis.google.com;
+        font-src 'self';
+        object-src 'none';
+        base-uri 'self';
+        form-action 'self';">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>Bug Tracker Pro</title>
     <meta name="description" content="Bug and issue tracker for game development with Kanban, milestones and cloud sync.">
     <!-- Apply saved theme before paint to avoid a flash -->
-    <script>try { if (localStorage.getItem('theme') === 'light') document.documentElement.classList.remove('dark'); } catch (e) {}</script>
+    <script src="theme.js"></script>
     <!-- Tailwind CSS (pre-built: run `npm run build:css` after changing classes) -->
     <link rel="stylesheet" href="tailwind.css">
-    <!-- Marked for Markdown rendering -->
-    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-    <!-- DOMPurify sanitizes rendered Markdown (prevents XSS) -->
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-    <!-- Firebase Compat Libraries for easy Vanilla JS integration -->
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-
-    <style>
-        /* Custom scrollbar and transitions */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
-        .markdown-prose p { margin-bottom: 0.5rem; }
-        .markdown-prose ul { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 0.5rem; }
-        .markdown-prose pre { background: #1f2937; padding: 0.5rem; border-radius: 0.25rem; overflow-x: auto; margin-bottom: 0.5rem;}
-        .markdown-prose img { max-width: 100%; border-radius: 0.25rem; }
-        .drag-over { border: 2px dashed #3b82f6 !important; background-color: rgba(59, 130, 246, 0.1) !important; }
-    </style>
+    <!-- Third-party scripts are pinned and integrity-checked -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js" integrity="sha384-4gq9w/AGf72FXdNQ3Kn3EqWP7633NbCMjpYHt8YCZyXf23o2opcuAr4cif41tLrC" crossorigin="anonymous"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js" integrity="sha384-Qgqc/HETq5lqJnRDqWnV1AZGw3pgMYNUVaqLLN1W/55XuWK94epwbCQrOvdoh1Zo" crossorigin="anonymous"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js" integrity="sha384-xtdq4MQqPj1dB5DQsuw9O7dh4kHhMP/Wp5u8O1jiaWiou13ZfJIgiccjtVK2pBhL" crossorigin="anonymous"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js" integrity="sha384-yTXgVdKIoM5XuQZ1AGw9zFUgmu45OeHYpGDbbWtXHu/qOJxneVAXbw5Rh5CGninE" crossorigin="anonymous"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions-compat.js" integrity="sha384-VZ3ffKEdaGenwt9PHb3mi4tIYhUneHNLCvFU20aZ92xtmgjTm+SFpHHrvVmrr4c9" crossorigin="anonymous"></script>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans min-h-screen transition-colors duration-200 pb-24">
+    <a href="#issuesArea" class="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:bg-blue-600 focus:text-white focus:p-2">Skip to issues</a>
 
     <!-- Header & Progress Bar -->
     <header class="bg-white dark:bg-gray-800 shadow-md sticky top-0 z-40 border-b border-gray-200 dark:border-gray-700">
-        <!-- Progress Bar -->
-        <div class="h-1.5 w-full bg-gray-200 dark:bg-gray-700">
-            <div id="progressBar" class="h-1.5 bg-green-500 transition-all duration-500" style="width: 0%;"></div>
+        <div class="h-1.5 w-full bg-gray-200 dark:bg-gray-700" role="progressbar" aria-label="Issues fixed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressWrap">
+            <div id="progressBar" class="h-1.5 bg-green-500 transition-all duration-500 w-0"></div>
         </div>
 
         <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
             <div class="flex items-center gap-3">
                 <h1 class="text-xl md:text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                    👾 Bug Tracker Pro
+                    <span aria-hidden="true">👾</span> Bug Tracker Pro
                 </h1>
-                <div id="syncStatus" class="text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-200 font-medium">Connecting...</div>
+                <div id="syncStatus" role="status" class="text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-200 font-medium">Connecting...</div>
             </div>
 
-            <!-- Project Selection -->
             <div class="flex items-center gap-2">
+                <label for="projectSelect" class="sr-only">Project</label>
                 <select id="projectSelect" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-1.5 text-sm outline-none font-medium text-gray-800 dark:text-gray-200">
-                    <option value="main">Main Project</option>
+                    <option value="main">main</option>
                 </select>
-                <button onclick="openProjectModal('add')" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Add Project">➕</button>
-                <button onclick="openProjectModal('edit')" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Rename Project">✏️</button>
+                <button type="button" data-action="openProjectModal" data-mode="add" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Add project" aria-label="Add project">➕</button>
+                <button type="button" data-action="openProjectModal" data-mode="edit" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Rename project" aria-label="Rename project">✏️</button>
             </div>
 
             <div class="flex items-center gap-2">
-                <button id="authBtn" onclick="toggleAuth()" class="text-sm px-3 py-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition">🔑 Sign in</button>
-                <button onclick="toggleTheme()" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Toggle Theme">🌓</button>
-                <button onclick="openShareModal()" class="text-sm px-3 py-1.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/60 font-medium transition">ℹ️ Share</button>
+                <button type="button" id="authBtn" data-action="toggleAuth" class="text-sm px-3 py-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition">🔑 Sign in</button>
+                <button type="button" data-action="openSettings" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Settings" aria-label="Settings">⚙️</button>
+                <button type="button" data-action="toggleTheme" class="p-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">🌓</button>
+                <button type="button" data-action="openShareModal" class="text-sm px-3 py-1.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/60 font-medium transition">ℹ️ Share</button>
             </div>
         </div>
     </header>
@@ -68,13 +71,16 @@
         <!-- Toolbar Filters -->
         <div class="flex flex-wrap items-center justify-between gap-4 mb-6 bg-white dark:bg-gray-800 p-3 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
             <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto flex-1">
-                <input type="text" id="searchBar" placeholder="🔍 Search bugs..." class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none w-full md:w-48 text-gray-800 dark:text-white">
+                <label for="searchBar" class="sr-only">Search bugs</label>
+                <input type="search" id="searchBar" placeholder="🔍 Search bugs..." class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none w-full md:w-48 text-gray-800 dark:text-white">
+                <label for="filterStatus" class="sr-only">Filter by status</label>
                 <select id="filterStatus" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
                     <option value="all">All Statuses</option>
                     <option value="open">Open</option>
                     <option value="in_progress">In Progress</option>
                     <option value="fixed">Fixed</option>
                 </select>
+                <label for="filterImpact" class="sr-only">Filter by priority</label>
                 <select id="filterImpact" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
                     <option value="all">All Priorities</option>
                     <option value="1">Critical Only</option>
@@ -82,61 +88,72 @@
                     <option value="3">Medium Only</option>
                     <option value="4">Low Only</option>
                 </select>
+                <label for="filterMilestone" class="sr-only">Filter by milestone</label>
                 <select id="filterMilestone" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
                     <option value="all">All Milestones</option>
                 </select>
+                <label for="filterAssignee" class="sr-only">Filter by assignee</label>
+                <select id="filterAssignee" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
+                    <option value="all">Everyone's bugs</option>
+                    <option value="mine">My bugs</option>
+                    <option value="none">Unassigned</option>
+                </select>
             </div>
             <div class="flex items-center gap-2">
-                <button onclick="exportData()" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Backup to JSON">⬇️ Export</button>
-                <button onclick="document.getElementById('importFile').click()" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Restore from JSON">⬆️ Import</button>
-                <input type="file" id="importFile" accept=".json" class="hidden" onchange="importData(event)">
-                <button id="toggleViewBtn" onclick="toggleView()" class="text-sm px-3 py-2 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 font-medium transition">📋 Kanban</button>
+                <button type="button" data-action="exportData" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Download a JSON backup">⬇️ Export</button>
+                <button type="button" data-action="pickImport" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Restore from a JSON backup">⬆️ Import</button>
+                <input type="file" id="importFile" accept=".json,application/json" class="hidden" aria-label="Backup file to import">
+                <button type="button" id="toggleViewBtn" data-action="toggleView" class="text-sm px-3 py-2 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 font-medium transition">📋 Kanban</button>
             </div>
         </div>
 
+        <!-- Mobile: the form is hidden behind this button -->
+        <button type="button" id="newIssueBtn" data-action="toggleForm" aria-expanded="false" aria-controls="formPanel" class="xl:hidden w-full mb-4 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded shadow-md">➕ New Issue</button>
+
         <div class="grid grid-cols-1 xl:grid-cols-4 gap-6">
             <!-- Form Sidebar -->
-            <div class="xl:col-span-1">
-                <div class="bg-white dark:bg-gray-800 p-5 rounded-lg shadow-md border border-gray-200 dark:border-gray-700 sticky top-24">
+            <div id="formPanel" class="xl:col-span-1 hidden xl:block">
+                <section aria-labelledby="formTitle" class="bg-white dark:bg-gray-800 p-5 rounded-lg shadow-md border border-gray-200 dark:border-gray-700 xl:sticky xl:top-24">
                     <div class="flex justify-between items-center mb-4">
                         <h2 id="formTitle" class="text-lg font-bold text-gray-800 dark:text-white">Log Issue</h2>
-                        <button id="cancelEditBtn" onclick="clearForm()" class="hidden text-xs text-red-500 hover:text-red-600 font-bold">Cancel Edit</button>
+                        <button type="button" id="cancelEditBtn" data-action="cancelForm" class="hidden text-xs text-red-600 dark:text-red-400 hover:underline font-bold">Cancel</button>
                     </div>
                     <form id="issueForm" class="space-y-3">
                         <input type="hidden" id="editId" value="">
                         <div>
-                            <div class="flex justify-between items-end mb-1">
-                                <label class="block text-sm text-gray-600 dark:text-gray-300">Description (Markdown OK)</label>
+                            <div class="flex justify-between items-end mb-1 gap-1">
+                                <label for="desc" class="block text-sm text-gray-600 dark:text-gray-300">Description (Markdown OK)</label>
                                 <div class="flex gap-1">
-                                    <button type="button" onclick="insertImageMarkdown()" class="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600">🖼️ Img</button>
-                                    <button type="button" id="aiBtn" onclick="autoCategorize()" class="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-2 py-1 rounded font-bold hover:bg-blue-200 dark:hover:bg-blue-800/60 transition">✨ AI Category</button>
+                                    <button type="button" data-action="pickImage" class="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600" title="Upload a screenshot (or paste one into the description)">🖼️ Img</button>
+                                    <button type="button" id="aiBtn" data-action="autoCategorize" class="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-2 py-1 rounded font-bold hover:bg-blue-200 dark:hover:bg-blue-800/60 transition" title="Suggest subject and priority with AI">✨ AI Category</button>
                                 </div>
                             </div>
-                            <textarea id="desc" required class="w-full bg-gray-50 dark:bg-gray-900 rounded p-2 text-sm border border-gray-300 dark:border-gray-600 outline-none focus:border-blue-500 text-gray-800 dark:text-white" rows="4" placeholder="Describe the bug..."></textarea>
+                            <input type="file" id="imageFile" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" aria-label="Screenshot to upload">
+                            <textarea id="desc" required maxlength="20000" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-2 text-sm border border-gray-300 dark:border-gray-600 outline-none focus:border-blue-500 text-gray-800 dark:text-white" rows="4" placeholder="Describe the bug... (you can paste a screenshot)"></textarea>
                         </div>
                         <div class="grid grid-cols-2 gap-2">
                             <div>
-                                <label class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Subject</label>
+                                <label for="subject" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Subject</label>
                                 <select id="subject" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
-                                    <option>Gameplay & Balance</option>
-                                    <option>UI & Navigation</option>
-                                    <option>Visuals & Juice</option>
+                                    <option>Gameplay &amp; Balance</option>
+                                    <option>UI &amp; Navigation</option>
+                                    <option>Visuals &amp; Juice</option>
                                     <option>Technical / Architecture</option>
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Priority</label>
+                                <label for="impact" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Priority</label>
                                 <select id="impact" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
                                     <option value="1">1 - Critical</option>
                                     <option value="2">2 - High</option>
-                                    <option value="3">3 - Medium</option>
+                                    <option value="3" selected>3 - Medium</option>
                                     <option value="4">4 - Low</option>
                                 </select>
                             </div>
                         </div>
                         <div class="grid grid-cols-2 gap-2">
                             <div>
-                                <label class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Story Points</label>
+                                <label for="points" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Story Points</label>
                                 <select id="points" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
                                     <option value="">None</option>
                                     <option value="1">1 (Trivial)</option>
@@ -147,95 +164,142 @@
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Milestone</label>
-                                <input type="text" id="milestone" list="milestoneList" placeholder="e.g. Alpha v1" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
+                                <label for="milestone" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Milestone</label>
+                                <input type="text" id="milestone" maxlength="60" list="milestoneList" placeholder="e.g. Alpha v1" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
                                 <datalist id="milestoneList"></datalist>
                             </div>
                         </div>
                         <div>
-                            <label class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Tags (comma separated)</label>
-                            <input type="text" id="tags" placeholder="Audio, UI, Physics" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
+                            <label for="assignee" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Assignee</label>
+                            <select id="assignee" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
+                                <option value="">Unassigned</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="tags" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Tags (comma separated)</label>
+                            <input type="text" id="tags" maxlength="300" placeholder="Audio, UI, Physics" class="w-full bg-gray-50 dark:bg-gray-900 rounded p-1.5 text-sm border border-gray-300 dark:border-gray-600 outline-none text-gray-800 dark:text-white">
                         </div>
                         <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded transition shadow-md mt-2">Save Issue</button>
                     </form>
-                </div>
+                </section>
             </div>
 
             <!-- Issues Display Area -->
-            <div class="xl:col-span-3">
-                <!-- GRID VIEW -->
+            <section id="issuesArea" aria-label="Issues" class="xl:col-span-3">
                 <div id="gridView" class="space-y-3"></div>
 
-                <!-- KANBAN VIEW -->
                 <div id="kanbanView" class="hidden grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <!-- Open -->
                     <div class="bg-gray-200 dark:bg-gray-800/50 rounded-lg p-3 flex flex-col h-full border border-gray-300 dark:border-gray-700">
                         <h3 class="font-bold text-gray-700 dark:text-gray-300 mb-3 flex justify-between">
                             <span>Open</span>
                             <span id="kb-open-count" class="bg-gray-300 dark:bg-gray-700 px-2 rounded-full text-xs py-1">0</span>
                         </h3>
-                        <div id="kb-open" class="flex-1 space-y-3 min-h-[200px]" ondrop="drop(event, 'open')" ondragover="allowDrop(event)" ondragleave="dragLeave(event)"></div>
+                        <div id="kb-open" data-drop="open" class="flex-1 space-y-3 min-h-[200px]"></div>
                     </div>
-                    <!-- In Progress -->
                     <div class="bg-gray-200 dark:bg-gray-800/50 rounded-lg p-3 flex flex-col h-full border border-gray-300 dark:border-gray-700">
                         <h3 class="font-bold text-blue-700 dark:text-blue-400 mb-3 flex justify-between">
                             <span>In Progress</span>
                             <span id="kb-prog-count" class="bg-blue-200 dark:bg-blue-900/50 px-2 rounded-full text-xs py-1">0</span>
                         </h3>
-                        <div id="kb-in_progress" class="flex-1 space-y-3 min-h-[200px]" ondrop="drop(event, 'in_progress')" ondragover="allowDrop(event)" ondragleave="dragLeave(event)"></div>
+                        <div id="kb-in_progress" data-drop="in_progress" class="flex-1 space-y-3 min-h-[200px]"></div>
                     </div>
-                    <!-- Fixed -->
                     <div class="bg-gray-200 dark:bg-gray-800/50 rounded-lg p-3 flex flex-col h-full border border-gray-300 dark:border-gray-700">
                         <h3 class="font-bold text-green-700 dark:text-green-400 mb-3 flex justify-between">
                             <span>Fixed</span>
                             <span id="kb-fixed-count" class="bg-green-200 dark:bg-green-900/50 px-2 rounded-full text-xs py-1">0</span>
                         </h3>
-                        <div id="kb-fixed" class="flex-1 space-y-3 min-h-[200px]" ondrop="drop(event, 'fixed')" ondragover="allowDrop(event)" ondragleave="dragLeave(event)"></div>
+                        <div id="kb-fixed" data-drop="fixed" class="flex-1 space-y-3 min-h-[200px]"></div>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
     </main>
 
     <!-- Floating Bulk Action Bar -->
-    <div id="bulkActionBar" class="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 shadow-2xl p-4 transform translate-y-full transition-transform duration-300 z-50 flex justify-between items-center px-4 md:px-8">
+    <div id="bulkActionBar" role="region" aria-label="Bulk actions" class="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 shadow-2xl p-4 transform translate-y-full transition-transform duration-300 z-40 flex flex-wrap gap-2 justify-between items-center px-4 md:px-8">
         <div class="text-sm font-bold text-gray-800 dark:text-white">
             <span id="bulkCount">0</span> issues selected
         </div>
-        <div class="flex gap-2">
-            <button onclick="bulkUpdateStatus('fixed')" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded text-sm font-bold transition">Mark Fixed</button>
-            <button onclick="bulkDelete()" class="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded text-sm font-bold transition">Delete Selected</button>
-            <button onclick="clearSelection()" class="bg-gray-500 hover:bg-gray-400 text-white px-4 py-2 rounded text-sm transition">Cancel</button>
+        <div class="flex flex-wrap gap-2">
+            <button type="button" data-action="bulkUpdateStatus" data-status="fixed" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded text-sm font-bold transition">Mark Fixed</button>
+            <button type="button" data-action="bulkDelete" class="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded text-sm font-bold transition">Delete Selected</button>
+            <button type="button" data-action="clearSelection" class="bg-gray-500 hover:bg-gray-400 text-white px-4 py-2 rounded text-sm transition">Cancel</button>
         </div>
     </div>
 
-    <!-- Modals -->
+    <!-- Toast (undo, messages) -->
+    <div id="toast" role="status" aria-live="polite" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-3 rounded-lg shadow-xl flex items-center gap-4 text-sm max-w-[90vw]">
+        <span id="toastText"></span>
+        <button type="button" id="toastAction" data-action="toastAction" class="font-bold underline hidden">Undo</button>
+    </div>
+
     <!-- Project Modal -->
-    <div id="projectModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4">
+    <div id="projectModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
         <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-sm border border-gray-200 dark:border-gray-700">
             <h2 id="projectModalTitle" class="text-lg font-bold mb-4 text-gray-800 dark:text-white">Manage Project</h2>
-            <input type="text" id="projectModalInput" placeholder="Project Name" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-gray-800 dark:text-white mb-4 outline-none">
+            <label for="projectModalInput" class="sr-only">Project name</label>
+            <input type="text" id="projectModalInput" maxlength="60" placeholder="Project Name" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-gray-800 dark:text-white mb-4 outline-none">
             <div class="flex justify-end gap-2">
-                <button onclick="closeProjectModal()" class="px-4 py-2 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition">Cancel</button>
-                <button onclick="confirmProjectModal()" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Save</button>
+                <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition">Cancel</button>
+                <button type="button" data-action="confirmProjectModal" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Save</button>
             </div>
         </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <form id="settingsForm" class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-sm border border-gray-200 dark:border-gray-700 space-y-3">
+            <h2 id="settingsTitle" class="text-lg font-bold text-gray-800 dark:text-white">⚙️ Game Settings</h2>
+            <p class="text-xs text-gray-600 dark:text-gray-400">Used in the 🤖 Claude prompt. Shared with your team when signed in.</p>
+            <div>
+                <label for="setEngine" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Engine</label>
+                <input id="setEngine" maxlength="60" placeholder="Unity" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm text-gray-800 dark:text-white outline-none">
+            </div>
+            <div>
+                <label for="setGenre" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Genre / kind of game</label>
+                <input id="setGenre" maxlength="100" placeholder="idle/incremental game" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm text-gray-800 dark:text-white outline-none">
+            </div>
+            <div>
+                <label for="setLanguage" class="block text-xs mb-1 text-gray-600 dark:text-gray-300">Programming language</label>
+                <input id="setLanguage" maxlength="40" placeholder="C#" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm text-gray-800 dark:text-white outline-none">
+            </div>
+            <div class="flex justify-between items-center gap-2 pt-2">
+                <button type="button" data-action="forgetGeminiKey" class="text-xs text-red-600 dark:text-red-400 hover:underline">Forget my Gemini key</button>
+                <div class="flex gap-2">
+                    <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition">Cancel</button>
+                    <button type="submit" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Save</button>
+                </div>
+            </div>
+        </form>
     </div>
 
     <!-- Share Modal -->
-    <div id="shareModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4">
+    <div id="shareModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
         <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md border border-gray-200 dark:border-gray-700">
-            <h2 class="text-xl font-bold mb-3 text-gray-800 dark:text-white">🤝 Saving &amp; Sharing</h2>
+            <h2 id="shareTitle" class="text-xl font-bold mb-3 text-gray-800 dark:text-white">🤝 Saving &amp; Sharing</h2>
             <ul class="text-sm text-gray-600 dark:text-gray-300 list-disc pl-5 mb-4 space-y-1">
                 <li><b>Signed out:</b> issues are saved in this browser only.</li>
-                <li><b>Signed in:</b> issues are saved to the cloud and sync live with your team. Anything saved in the browser can be uploaded when you sign in.</li>
-                <li>To invite a teammate, add their Google email to <code>firestore.rules</code>, publish the rules, and send them this page's link.</li>
-                <li>Use <b>Export</b> any time for a backup file.</li>
+                <li><b>Signed in:</b> issues are saved to the cloud and sync live with your team, even after working offline. Anything saved in the browser can be uploaded when you sign in.</li>
+                <li>To invite a teammate, add their Google email to <code>firestore.rules</code> and <code>storage.rules</code>, deploy the rules, and send them this page's link.</li>
+                <li>Deleted issues can be undone for a few seconds. Use <b>Export</b> any time for a backup file.</li>
             </ul>
             <div class="flex justify-end">
-                <button onclick="closeShareModal()" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Got it!</button>
+                <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Got it!</button>
             </div>
         </div>
+    </div>
+
+    <!-- Note Modal (add / edit) -->
+    <div id="noteModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="noteTitle">
+        <form id="noteForm" class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md border border-gray-200 dark:border-gray-700 space-y-3">
+            <h2 id="noteTitle" class="text-lg font-bold text-gray-800 dark:text-white">Add Note</h2>
+            <label for="noteText" class="sr-only">Note</label>
+            <textarea id="noteText" required maxlength="2000" rows="4" class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm text-gray-800 dark:text-white outline-none"></textarea>
+            <div class="flex justify-end gap-2">
+                <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition">Cancel</button>
+                <button type="submit" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Save</button>
+            </div>
+        </form>
     </div>
 
     <script src="lib.js"></script>

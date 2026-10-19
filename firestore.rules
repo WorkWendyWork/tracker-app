@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // Teammates allowed to use the tracker (Google account emails, lowercase).
-    // Add one email per line, then publish these rules in the Firebase console.
+    // Keep this list the same in storage.rules and functions/.env.
     function isTeamMember() {
       return request.auth != null
         && request.auth.token.email_verified == true
@@ -12,8 +12,90 @@ service cloud.firestore {
         ];
     }
 
-    match /workspaces/{workspace}/{document=**} {
-      allow read, write: if isTeamMember();
+    function isShortString(v, max) {
+      return v is string && v.size() <= max;
+    }
+
+    // Must match sanitizeIssue() and LIMITS in lib.js
+    function validIssue(d, id) {
+      return d.keys().hasOnly(['id', 'tag', 'desc', 'subject', 'impact', 'points', 'milestone', 'tags',
+                               'assignee', 'status', 'notes', 'history', 'createdBy', 'createdByUid',
+                               'createdAt', 'updatedBy', 'updatedAt'])
+        && d.keys().hasAll(['id', 'tag', 'desc', 'subject', 'impact', 'status', 'notes'])
+        && d.id == id
+        && (d.tag == '' || d.tag.matches('^BUG-[0-9]{1,8}$'))
+        && isShortString(d.desc, 20000)
+        && d.subject in ['Gameplay & Balance', 'UI & Navigation', 'Visuals & Juice', 'Technical / Architecture']
+        && d.impact in ['1', '2', '3', '4']
+        && d.status in ['open', 'in_progress', 'fixed']
+        && (!('points' in d) || d.points in ['', '1', '2', '3', '5', '8'])
+        && (!('milestone' in d) || isShortString(d.milestone, 60))
+        && (!('tags' in d) || isShortString(d.tags, 300))
+        && (!('assignee' in d) || isShortString(d.assignee, 200))
+        && d.notes is list && d.notes.size() <= 200
+        && (!('history' in d) || (d.history is list && d.history.size() <= 50))
+        && (!('createdBy' in d) || isShortString(d.createdBy, 200))
+        && (!('createdByUid' in d) || isShortString(d.createdByUid, 128))
+        && (!('updatedBy' in d) || isShortString(d.updatedBy, 200))
+        && (!('createdAt' in d) || d.createdAt is number)
+        && (!('updatedAt' in d) || d.updatedAt is number);
+    }
+
+    match /workspaces/{workspace} {
+
+      match /meta/projects {
+        allow read: if isTeamMember();
+        allow write: if isTeamMember()
+          && request.resource.data.keys().hasOnly(['list'])
+          && request.resource.data.list is list
+          && request.resource.data.list.size() >= 1
+          && request.resource.data.list.size() <= 100;
+      }
+
+      match /meta/members {
+        allow read: if isTeamMember();
+        allow write: if isTeamMember()
+          && request.resource.data.keys().hasOnly(['list'])
+          && request.resource.data.list is list
+          && request.resource.data.list.size() <= 100;
+      }
+
+      match /meta/settings {
+        allow read: if isTeamMember();
+        allow write: if isTeamMember()
+          && request.resource.data.keys().hasOnly(['engine', 'genre', 'language'])
+          && isShortString(request.resource.data.engine, 60)
+          && isShortString(request.resource.data.genre, 100)
+          && isShortString(request.resource.data.language, 40);
+      }
+
+      // Journal for multi-step jobs (rename, import)
+      match /ops/{opId} {
+        allow read, delete: if isTeamMember();
+        allow create, update: if isTeamMember()
+          && request.resource.data.type in ['rename', 'import'];
+      }
+
+      match /projects/{project} {
+        allow read, delete: if isTeamMember();
+        allow create, update: if isTeamMember()
+          && request.resource.data.keys().hasOnly(['nextBug'])
+          && request.resource.data.nextBug is int
+          && request.resource.data.nextBug >= 1;
+
+        match /issues/{issueId} {
+          allow read, delete: if isTeamMember();
+          allow create, update: if isTeamMember() && validIssue(request.resource.data, issueId);
+        }
+      }
+
+      // Legacy single-document format: read and delete only (for migration)
+      match /data/{project} {
+        allow read, delete: if isTeamMember();
+      }
+      match /counters/{project} {
+        allow read, delete: if isTeamMember();
+      }
     }
 
     // Everything else is locked.

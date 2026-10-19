@@ -1,0 +1,47 @@
+name: Daily backup
+
+# Saves the whole tracker database as a downloadable artifact every day.
+# Setup: add a repository secret FIREBASE_SERVICE_ACCOUNT containing a
+# service-account JSON key with the "Cloud Datastore User" role (read is enough).
+# Download backups from Actions → Daily backup → a run → Artifacts.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+    steps:
+      - name: Skip when not configured
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::FIREBASE_SERVICE_ACCOUNT secret not set; skipping backup."
+      - uses: actions/checkout@v4
+        if: env.HAS_KEY == 'true'
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: env.HAS_KEY == 'true'
+        run: npm ci
+      - name: Export Firestore
+        if: env.HAS_KEY == 'true'
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/key.json"
+          GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/key.json" node scripts/backup.mjs backup.json
+          rm -f "$RUNNER_TEMP/key.json"
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          name: tracker-backup-${{ github.run_id }}
+          path: backup.json
+          retention-days: 90
