@@ -1,13 +1,22 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Only signed-in users may touch the shared workspace.
-    // NOTE: anonymous sign-in means anyone who opens the site counts as signed in.
-    // For real privacy, switch to Google/email sign-in and check request.auth.uid
-    // against an allow-list of teammates.
-    match /workspaces/{workspace}/{document=**} {
-      allow read, write: if request.auth != null;
+
+    // Teammates allowed to use the tracker (Google account emails, lowercase).
+    // Add one email per line, then publish these rules in the Firebase console.
+    function isTeamMember() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in [
+          'your-email@example.com'
+        ];
     }
+
+    match /workspaces/{workspace}/{document=**} {
+      allow read, write: if isTeamMember();
+    }
+
+    // Everything else is locked.
     match /{document=**} {
       allow read, write: if false;
     }
