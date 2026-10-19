@@ -44,9 +44,9 @@ test('filterIssues filters and sorts by priority then number', () => {
     assert.deepEqual(lib.filterIssues(issues, { status: 'open' }).map(i => i.id), ['c', 'a']);
     assert.deepEqual(lib.filterIssues(issues, { impact: 1 }).map(i => i.id), ['b', 'c']);
     assert.deepEqual(lib.filterIssues(issues, { milestone: 'Alpha' }).map(i => i.id), ['a']);
-    assert.deepEqual(lib.filterIssues(issues, { query: 'CRASH' }).map(i => i.id), ['b']);
-    assert.deepEqual(lib.filterIssues(issues, { query: 'layout' }).map(i => i.id), ['c']);
-    assert.deepEqual(lib.filterIssues(issues, { query: 'bug-0002' }).map(i => i.id), ['a']);
+    assert.deepEqual(lib.filterIssues(issues, { q: 'CRASH' }).map(i => i.id), ['b']);
+    assert.deepEqual(lib.filterIssues(issues, { q: 'layout' }).map(i => i.id), ['c']);
+    assert.deepEqual(lib.filterIssues(issues, { q: 'bug-0002' }).map(i => i.id), ['a']);
 });
 
 test('filterIssues sort options', () => {
@@ -63,6 +63,71 @@ test('filterIssues sort options', () => {
     assert.equal(ids('updated'), 'bcad');
     assert.equal(ids('bogus'), 'cdab');
     assert.deepEqual(lib.SORTS, ['priority', 'subject', 'number', 'updated']);
+});
+
+test('advanced filters: multi-select groups, tags, points, reverse sort', () => {
+    const issues = [
+        { id: 'a', tag: 'BUG-0001', impact: '1', status: 'open', desc: 'Crash', subject: 'Technical / Architecture', points: '5', tags: 'Audio, UI' },
+        { id: 'b', tag: 'BUG-0002', impact: '2', status: 'in_progress', desc: 'Lag', subject: 'Technical / Architecture', points: '', tags: 'perf' },
+        { id: 'c', tag: 'BUG-0003', impact: '3', status: 'fixed', desc: 'Color', subject: 'Visuals & Juice', points: '1', tags: 'ui' },
+        { id: 'd', tag: 'BUG-0004', impact: '4', status: 'open', desc: 'Typo', subject: 'UI & Navigation', milestone: 'Beta' }
+    ];
+    const ids = (f, me) => lib.filterIssues(issues, f, me).map(i => i.id).join('');
+    assert.equal(ids({ status: ['open', 'in_progress'] }), 'abd');
+    assert.equal(ids({ status: ['open'], impact: ['1', '4'] }), 'ad');
+    assert.equal(ids({ subject: ['Technical / Architecture', 'Visuals & Juice'] }), 'abc');
+    assert.equal(ids({ points: ['none'] }), 'bd');
+    assert.equal(ids({ points: ['1', '5'] }), 'ac');
+    assert.equal(ids({ tags: ['UI'] }), 'ac');          // case-insensitive
+    assert.equal(ids({ milestone: ['Beta'] }), 'd');
+    assert.equal(ids({ rev: true }), 'dcba');
+    assert.equal(ids({ sort: 'number', rev: true }), 'dcba');
+});
+
+test('search supports multiple words, phrases, exclusions and notes', () => {
+    const issues = [
+        { id: 'a', impact: '1', status: 'open', desc: 'Player falls through floor', subject: 'Gameplay & Balance', notes: [{ text: 'only on level 3' }] },
+        { id: 'b', impact: '1', status: 'open', desc: 'Player floor texture blurry', subject: 'Visuals & Juice', notes: [] },
+        { id: 'c', impact: '1', status: 'open', desc: 'Menu falls apart', subject: 'UI & Navigation', notes: [] }
+    ];
+    const ids = (q) => lib.filterIssues(issues, { q }).map(i => i.id).join('');
+    assert.equal(ids('player floor'), 'ab');
+    assert.equal(ids('"falls through"'), 'a');
+    assert.equal(ids('falls -menu'), 'a');
+    assert.equal(ids('level 3'), 'a');
+    assert.equal(ids('-"floor texture"'), 'ac');
+    assert.equal(ids('   '), 'abc');
+    assert.deepEqual(lib.parseSearch('a "b c" -d -"e f" -'), [
+        { text: 'a', neg: false }, { text: 'b c', neg: false }, { text: 'd', neg: true }, { text: 'e f', neg: true }
+    ]);
+});
+
+test('normalizeFilters, counts and quick views', () => {
+    const f = lib.normalizeFilters({ status: 'open', impact: ['1', '1', ''], sort: 'nope', rev: '1', junk: 1 });
+    assert.deepEqual(f.status, ['open']);
+    assert.deepEqual(f.impact, ['1']);
+    assert.equal(f.sort, 'priority');
+    assert.equal(f.rev, true);
+    assert.equal('junk' in f, false);
+    assert.equal(lib.activeFilterCount({}), 0);
+    assert.equal(lib.activeFilterCount({ q: 'x', status: ['open'], tags: ['a', 'b'] }), 3);
+    assert.equal(lib.matchingQuickView({}), 'all');
+    assert.equal(lib.matchingQuickView({ q: 'crash' }), 'all');
+    assert.equal(lib.matchingQuickView({ status: ['open', 'in_progress'], impact: ['1', '2'] }), 'urgent');
+    assert.equal(lib.matchingQuickView({ status: ['open'] }), '');
+});
+
+test('filters round-trip through the URL', () => {
+    const f = { q: 'crash "on load"', status: ['open', 'fixed'], milestone: ['Alpha, v1'], assignee: ['@me', 'ann@x.com'], tags: ['UI'], sort: 'subject', rev: true };
+    const qs = lib.filtersToQuery(f);
+    assert.deepEqual(lib.queryToFilters('#' + qs), lib.normalizeFilters(f));
+    assert.equal(lib.filtersToQuery({}), '');
+    assert.deepEqual(lib.queryToFilters(''), lib.normalizeFilters({}));
+    assert.deepEqual(lib.queryToFilters('status=hacked&sort=evil').sort, 'priority');
+});
+
+test('tagsOf', () => {
+    assert.deepEqual(lib.tagsOf([{ tags: 'UI, audio' }, { tags: 'ui, Physics' }, {}]), ['audio', 'Physics', 'UI']);
 });
 
 test('progressPct and milestonesOf', () => {
@@ -106,9 +171,9 @@ test('filterIssues by assignee', () => {
         { id: 'b', impact: '1', status: 'open', desc: '', assignee: 'you@x.com' },
         { id: 'c', impact: '1', status: 'open', desc: '' }
     ];
-    assert.deepEqual(lib.filterIssues(issues, { assignee: 'mine', me: 'me@x.com' }).map(i => i.id), ['a']);
-    assert.deepEqual(lib.filterIssues(issues, { assignee: 'mine', me: '' }).map(i => i.id), []);
-    assert.deepEqual(lib.filterIssues(issues, { assignee: 'none' }).map(i => i.id), ['c']);
+    assert.deepEqual(lib.filterIssues(issues, { assignee: ['@me'] }, 'me@x.com').map(i => i.id), ['a']);
+    assert.deepEqual(lib.filterIssues(issues, { assignee: ['@me'] }, '').map(i => i.id), []);
+    assert.deepEqual(lib.filterIssues(issues, { assignee: ['@none'] }).map(i => i.id), ['c']);
 });
 
 test('describeChanges and withHistory', () => {

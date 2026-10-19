@@ -60,15 +60,108 @@ const COMPARATORS = {
     updated: (a, b) => byUpdated(a, b) || byNumber(a, b)
 };
 
-function filterIssues(issues, { status = 'all', impact = 'all', milestone = 'all', query = '', assignee = 'all', me = '', sort = 'priority' } = {}) {
-    const q = String(query).toLowerCase();
+// ==========================================
+// Filters
+// A filter group with an empty array means "any". Within a group values are
+// OR-ed (Open or In Progress); groups are AND-ed (… and Critical).
+// Assignee uses the special values '@me' and '@none'; points uses 'none'.
+// ==========================================
+const FILTER_GROUPS = ['status', 'impact', 'subject', 'points', 'milestone', 'assignee', 'tags'];
+const EMPTY_FILTERS = Object.freeze({ q: '', status: [], impact: [], subject: [], points: [], milestone: [], assignee: [], tags: [], sort: 'priority', rev: false });
+
+const QUICK_VIEWS = {
+    all: { label: 'All issues', filters: {} },
+    mine: { label: 'My open', filters: { assignee: ['@me'], status: ['open', 'in_progress'] } },
+    urgent: { label: 'Urgent', filters: { impact: ['1', '2'], status: ['open', 'in_progress'] } },
+    unassigned: { label: 'Unassigned', filters: { assignee: ['@none'], status: ['open', 'in_progress'] } },
+    recentFixed: { label: 'Recently fixed', filters: { status: ['fixed'], sort: 'updated' } }
+};
+
+function normalizeFilters(raw) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    const f = { q: clip(r.q, 200), sort: SORTS.includes(r.sort) ? r.sort : 'priority', rev: r.rev === true || r.rev === '1' };
+    FILTER_GROUPS.forEach(k => {
+        const v = Array.isArray(r[k]) ? r[k] : (r[k] == null || r[k] === '' ? [] : [r[k]]);
+        f[k] = [...new Set(v.map(x => clip(x, LIMITS.text)).filter(Boolean))];
+    });
+    return f;
+}
+
+// Splits a search into terms: words, "quoted phrases", and -excluded words.
+function parseSearch(q) {
+    const terms = [];
+    const re = /(-?)"([^"]*)"|(-?)(\S+)/g;
+    let m;
+    while ((m = re.exec(String(q || '')))) {
+        const neg = (m[1] || m[3]) === '-';
+        const text = (m[2] !== undefined ? m[2] : m[4]).toLowerCase().trim();
+        if (text && text !== '-') terms.push({ text, neg });
+    }
+    return terms;
+}
+
+const searchableText = (i) => [i.desc, i.subject, i.tag, i.tags, i.milestone, i.assignee,
+    ...(i.notes || []).map(n => n.text)].map(v => String(v || '')).join('\n').toLowerCase();
+
+function filterIssues(issues, filters = {}, me = '') {
+    const f = normalizeFilters(filters);
+    const terms = parseSearch(f.q);
+    const any = (arr, v) => !arr.length || arr.includes(v);
+    const tagSet = new Set(f.tags.map(t => t.toLowerCase()));
+    const cmp = COMPARATORS[f.sort];
     return issues
-        .filter(i => status === 'all' || i.status === status)
-        .filter(i => impact === 'all' || String(i.impact) === String(impact))
-        .filter(i => milestone === 'all' || i.milestone === milestone)
-        .filter(i => assignee === 'all' || (assignee === 'none' ? !i.assignee : (!!me && i.assignee === me)))
-        .filter(i => !q || [i.desc, i.subject, i.tag, i.tags, i.milestone, i.assignee].some(f => String(f || '').toLowerCase().includes(q)))
-        .sort(COMPARATORS[sort] || COMPARATORS.priority);
+        .filter(i => any(f.status, i.status))
+        .filter(i => any(f.impact, String(i.impact)))
+        .filter(i => any(f.subject, i.subject))
+        .filter(i => any(f.points, i.points ? String(i.points) : 'none'))
+        .filter(i => any(f.milestone, i.milestone || ''))
+        .filter(i => !f.assignee.length || f.assignee.some(a =>
+            a === '@me' ? (!!me && i.assignee === me) : a === '@none' ? !i.assignee : i.assignee === a))
+        .filter(i => !tagSet.size || parseTags(i.tags).some(t => tagSet.has(t.toLowerCase())))
+        .filter(i => {
+            if (!terms.length) return true;
+            const text = searchableText(i);
+            return terms.every(t => text.includes(t.text) !== t.neg);
+        })
+        .sort(f.rev ? (a, b) => cmp(b, a) : cmp);
+}
+
+const activeFilterCount = (filters) => {
+    const f = normalizeFilters(filters);
+    return FILTER_GROUPS.filter(k => f[k].length).length + (f.q.trim() ? 1 : 0);
+};
+
+// Which quick view (if any) the filters exactly match, ignoring the search box.
+function matchingQuickView(filters) {
+    const f = normalizeFilters(filters);
+    const key = (x) => JSON.stringify({ ...normalizeFilters(x), q: '' });
+    const target = key(f);
+    return Object.keys(QUICK_VIEWS).find(k => key(QUICK_VIEWS[k].filters) === target) || '';
+}
+
+// Filters <-> URL query string (for shareable links). Defaults are omitted.
+function filtersToQuery(filters) {
+    const f = normalizeFilters(filters);
+    const p = new URLSearchParams();
+    if (f.q) p.set('q', f.q);
+    FILTER_GROUPS.forEach(k => f[k].forEach(v => p.append(k, v)));
+    if (f.sort !== 'priority') p.set('sort', f.sort);
+    if (f.rev) p.set('rev', '1');
+    return p.toString();
+}
+
+function queryToFilters(query) {
+    const p = new URLSearchParams(String(query || '').replace(/^[#?]/, ''));
+    const raw = { q: p.get('q') || '', sort: p.get('sort') || 'priority', rev: p.get('rev') === '1' };
+    FILTER_GROUPS.forEach(k => { raw[k] = p.getAll(k); });
+    return normalizeFilters(raw);
+}
+
+// Unique tags across issues (case-insensitive), sorted.
+function tagsOf(issues) {
+    const seen = new Map();
+    issues.forEach(i => parseTags(i.tags).forEach(t => { if (!seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t); }));
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
 function progressPct(issues) {
@@ -203,7 +296,8 @@ if (typeof module !== 'undefined') {
     module.exports = {
         STATUSES, STATUS_LABELS, SUBJECTS, POINTS, SORTS, LIMITS, MAX_IMAGE_BYTES,
         getImpactLabel, getImpactColor, esc, bugNum, fmtBug, nextBugNumber, newId,
-        parseTags, normalizeProjectName, filterIssues, progressPct, milestonesOf, formatDate,
+        parseTags, normalizeProjectName, filterIssues, FILTER_GROUPS, EMPTY_FILTERS, QUICK_VIEWS,
+        normalizeFilters, parseSearch, activeFilterCount, matchingQuickView, filtersToQuery, queryToFilters, tagsOf, progressPct, milestonesOf, formatDate,
         sanitizeIssue, validateImport, describeChanges, withHistory,
         formatIssueText, buildCategorizePrompt, checkImageFile, parseAiJson, chunk
     };

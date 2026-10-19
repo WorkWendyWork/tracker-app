@@ -67,51 +67,43 @@
     </header>
 
     <main class="max-w-7xl mx-auto px-4 py-6">
-        <!-- Toolbar Filters -->
-        <div class="flex flex-wrap items-center justify-between gap-4 mb-6 bg-white dark:bg-gray-800 p-3 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-            <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto flex-1">
-                <label for="searchBar" class="sr-only">Search bugs</label>
-                <input type="search" id="searchBar" placeholder="🔍 Search bugs..." class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none w-full md:w-48 text-gray-800 dark:text-white">
-                <label for="filterStatus" class="sr-only">Filter by status</label>
-                <select id="filterStatus" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
-                    <option value="all">All Statuses</option>
-                    <option value="open">Open</option>
-                    <option value="in_progress">In Progress</option>
-                    <option value="fixed">Fixed</option>
-                </select>
-                <label for="filterImpact" class="sr-only">Filter by priority</label>
-                <select id="filterImpact" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
-                    <option value="all">All Priorities</option>
-                    <option value="1">Critical Only</option>
-                    <option value="2">High Only</option>
-                    <option value="3">Medium Only</option>
-                    <option value="4">Low Only</option>
-                </select>
-                <label for="filterMilestone" class="sr-only">Filter by milestone</label>
-                <select id="filterMilestone" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
-                    <option value="all">All Milestones</option>
-                </select>
-                <label for="filterAssignee" class="sr-only">Filter by assignee</label>
-                <select id="filterAssignee" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
-                    <option value="all">Everyone's bugs</option>
-                    <option value="mine">My bugs</option>
-                    <option value="none">Unassigned</option>
-                </select>
-                <label for="sortBy" class="sr-only">Sort by</label>
-                <select id="sortBy" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none text-gray-800 dark:text-white">
-                    <option value="priority">Sort: Priority</option>
-                    <option value="subject">Sort: Subject</option>
-                    <option value="number">Sort: Bug number</option>
-                    <option value="updated">Sort: Recently updated</option>
-                </select>
+        <!-- Search, sort & filters -->
+        <section aria-label="Search and filters" class="mb-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+            <div class="p-3 flex flex-wrap items-center gap-2">
+                <div class="flex-1 min-w-[220px]">
+                    <label for="searchBar" class="sr-only">Search bugs</label>
+                    <input type="search" id="searchBar" maxlength="200" placeholder='🔍 Search…  e.g. crash "on load" -menu' title='All words must match. Use "quotes" for phrases and -word to exclude.' class="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-2 text-sm outline-none focus:border-blue-500 text-gray-800 dark:text-white">
+                </div>
+                <button type="button" id="filtersBtn" data-action="toggleFilters" aria-expanded="false" aria-controls="filterPanel" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition flex items-center gap-1.5">
+                    🎛️ Filters <span id="filterCount" class="hidden min-w-[1.25rem] text-center text-xs font-bold px-1.5 rounded-full bg-blue-600 text-white"></span>
+                </button>
+                <div class="flex items-center">
+                    <label for="sortBy" class="sr-only">Sort by</label>
+                    <select id="sortBy" class="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-l p-2 text-sm outline-none text-gray-800 dark:text-white">
+                        <option value="priority">Sort: Priority</option>
+                        <option value="subject">Sort: Subject</option>
+                        <option value="number">Sort: Bug number</option>
+                        <option value="updated">Sort: Recently updated</option>
+                    </select>
+                    <button type="button" id="sortDirBtn" data-action="toggleSortDir" aria-pressed="false" title="Reverse sort order" aria-label="Reverse sort order" class="text-sm px-2.5 py-2 rounded-r border border-l-0 border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-800 dark:text-white">↓</button>
+                </div>
+                <div class="flex items-center gap-2 ml-auto">
+                    <button type="button" data-action="exportData" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Download a JSON backup">⬇️ Export</button>
+                    <button type="button" data-action="pickImport" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Restore from a JSON backup">⬆️ Import</button>
+                    <input type="file" id="importFile" accept=".json,application/json" class="hidden" aria-label="Backup file to import">
+                    <button type="button" id="toggleViewBtn" data-action="toggleView" class="text-sm px-3 py-2 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 font-medium transition">📋 Kanban</button>
+                </div>
             </div>
-            <div class="flex items-center gap-2">
-                <button type="button" data-action="exportData" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Download a JSON backup">⬇️ Export</button>
-                <button type="button" data-action="pickImport" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Restore from a JSON backup">⬆️ Import</button>
-                <input type="file" id="importFile" accept=".json,application/json" class="hidden" aria-label="Backup file to import">
-                <button type="button" id="toggleViewBtn" data-action="toggleView" class="text-sm px-3 py-2 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 font-medium transition">📋 Kanban</button>
-            </div>
-        </div>
+
+            <!-- Quick views -->
+            <div id="quickViews" role="group" aria-label="Quick views" class="px-3 pb-3 flex flex-wrap gap-2"></div>
+
+            <!-- Filter panel (multi-select chips per group) -->
+            <div id="filterPanel" class="hidden border-t border-gray-200 dark:border-gray-700 p-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+
+            <!-- Active filters + result count -->
+            <div id="activeFilters" aria-live="polite" class="border-t border-gray-200 dark:border-gray-700 px-3 py-2 flex flex-wrap items-center gap-2 text-xs text-gray-600 dark:text-gray-300"></div>
+        </section>
 
         <!-- Mobile: the form is hidden behind this button -->
         <button type="button" id="newIssueBtn" data-action="toggleForm" aria-expanded="false" aria-controls="formPanel" class="xl:hidden w-full mb-4 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded shadow-md">➕ New Issue</button>

@@ -545,17 +545,143 @@ function updateAssigneeOptions() {
     sel.innerHTML = '<option value="">Unassigned</option>' +
         members.map(m => `<option value="${esc(m.email)}">${esc(m.name)}</option>`).join('');
     if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
-    $('filterAssignee').disabled = !isOnline();
 }
 
-function updateMilestoneFilter() {
-    const filter = $('filterMilestone');
-    const currentVal = filter.value;
-    const milestones = milestonesOf(issues);
-    filter.innerHTML = '<option value="all">All Milestones</option>' +
-        milestones.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
-    filter.value = milestones.includes(currentVal) ? currentVal : 'all';
-    $('milestoneList').innerHTML = milestones.map(m => `<option value="${esc(m)}"></option>`).join('');
+function updateMilestoneList() {
+    $('milestoneList').innerHTML = milestonesOf(issues).map(m => `<option value="${esc(m)}"></option>`).join('');
+}
+
+// ==========================================
+// Search, sort & filters
+// State lives in `filters`; it is mirrored to the URL (shareable links)
+// and to localStorage (remembered between visits).
+// ==========================================
+const FILTERS_KEY = 'btp_filters';
+
+function loadFilters() {
+    if (location.hash.length > 1) return queryToFilters(location.hash);
+    try {
+        const saved = JSON.parse(localStorage.getItem(FILTERS_KEY));
+        if (saved) return normalizeFilters(saved);
+        const oldSort = localStorage.getItem('sort'); // from the previous version
+        if (SORTS.includes(oldSort)) return normalizeFilters({ sort: oldSort });
+    } catch (e) { /* storage blocked or corrupt */ }
+    return normalizeFilters({});
+}
+let filters = loadFilters();
+let filterPanelOpen = false;
+
+function setFilters(next) {
+    filters = normalizeFilters(next);
+    try { localStorage.setItem(FILTERS_KEY, JSON.stringify(filters)); } catch (e) {}
+    const qs = filtersToQuery(filters);
+    history.replaceState(null, '', qs ? `#${qs}` : location.pathname + location.search);
+    renderIssues();
+}
+
+window.addEventListener('hashchange', () => {
+    filters = queryToFilters(location.hash);
+    renderIssues();
+});
+
+function toggleFilterValue(key, value) {
+    const cur = filters[key] || [];
+    setFilters({ ...filters, [key]: cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value] });
+}
+
+// Options for each filter group, with counts across the whole project.
+function filterGroups() {
+    const count = (pred) => issues.filter(pred).length;
+    const withSelected = (key, opts) => {
+        // Keep selected values visible even if no issue has them any more
+        const known = new Set(opts.map(o => o[0]));
+        return opts.concat(filters[key].filter(v => !known.has(v)).map(v => [v, v]));
+    };
+    const assigneeOpts = [
+        ...(isOnline() ? [['@me', 'Me']] : []),
+        ['@none', 'Unassigned'],
+        ...members.map(m => [m.email, m.name])
+    ];
+    const groups = [
+        { key: 'status', label: 'Status', opts: STATUSES.map(s => [s, STATUS_LABELS[s]]), test: v => i => i.status === v },
+        { key: 'impact', label: 'Priority', opts: ['1', '2', '3', '4'].map(v => [v, getImpactLabel(v)]), test: v => i => String(i.impact) === v },
+        { key: 'subject', label: 'Subject', opts: SUBJECTS.map(s => [s, s]), test: v => i => i.subject === v },
+        { key: 'points', label: 'Story points', opts: [['none', 'None'], ...POINTS.map(p => [p, `${p} pt${p === '1' ? '' : 's'}`])], test: v => i => (i.points || 'none') === v },
+        { key: 'milestone', label: 'Milestone', opts: milestonesOf(issues).map(m => [m, m]), test: v => i => i.milestone === v },
+        { key: 'assignee', label: 'Assignee', opts: assigneeOpts, test: v => i => v === '@me' ? i.assignee === myEmail() : v === '@none' ? !i.assignee : i.assignee === v },
+        { key: 'tags', label: 'Tags', opts: tagsOf(issues).map(t => [t, t]), test: v => i => parseTags(i.tags).some(t => t.toLowerCase() === v.toLowerCase()) }
+    ];
+    return groups.map(g => ({ ...g, opts: withSelected(g.key, g.opts).map(([value, label]) => ({ value, label, n: count(g.test(value)) })) }));
+}
+
+const chipCls = (on) => `text-xs px-2.5 py-1 rounded-full border transition ${on
+    ? 'bg-blue-600 border-blue-600 text-white hover:bg-blue-500'
+    : 'bg-gray-100 dark:bg-gray-900 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-blue-500'}`;
+
+function renderFilterUI(shown) {
+    // Remember focus so re-rendering doesn't lose the keyboard position
+    const a = document.activeElement;
+    const focusKey = a && a.dataset && a.dataset.action ? [a.dataset.action, a.dataset.key || '', a.dataset.value || '', a.dataset.view || ''] : null;
+
+    // Search box and sort controls
+    if ($('searchBar').value !== filters.q && document.activeElement !== $('searchBar')) $('searchBar').value = filters.q;
+    $('sortBy').value = filters.sort;
+    $('sortDirBtn').innerText = filters.rev ? '↑' : '↓';
+    $('sortDirBtn').setAttribute('aria-pressed', String(filters.rev));
+    $('sortDirBtn').classList.toggle('text-blue-600', filters.rev);
+
+    // Filters button + badge
+    const n = activeFilterCount({ ...filters, q: '' });
+    $('filterCount').innerText = n;
+    $('filterCount').classList.toggle('hidden', !n);
+    $('filtersBtn').setAttribute('aria-expanded', String(filterPanelOpen));
+    $('filterPanel').classList.toggle('hidden', !filterPanelOpen);
+
+    // Quick views
+    const activeView = matchingQuickView(filters);
+    $('quickViews').innerHTML = Object.entries(QUICK_VIEWS)
+        .filter(([k]) => k !== 'mine' || isOnline())
+        .map(([k, v]) => `<button type="button" data-action="quickView" data-view="${k}" aria-pressed="${activeView === k}" class="${chipCls(activeView === k)}">${esc(v.label)}</button>`)
+        .join('');
+
+    // Panel: one group of toggle chips per filter
+    if (filterPanelOpen) {
+        $('filterPanel').innerHTML = filterGroups().map(g => `
+            <fieldset>
+                <legend class="text-xs font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1.5">${esc(g.label)}</legend>
+                <div class="flex flex-wrap gap-1.5">
+                    ${g.opts.length ? g.opts.map(o => {
+                        const on = filters[g.key].includes(o.value);
+                        return `<button type="button" data-action="toggleFilter" data-key="${g.key}" data-value="${esc(o.value)}" aria-pressed="${on}" class="${chipCls(on)}">${esc(o.label)} <span class="ml-0.5 px-1.5 rounded-full text-[10px] ${on ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700'}" aria-label="${o.n} issues">${o.n}</span></button>`;
+                    }).join('') : '<span class="text-xs italic text-gray-400">None yet</span>'}
+                </div>
+            </fieldset>`).join('');
+    }
+
+    // Active filters row with counts
+    const labelOf = (key, v) => {
+        if (key === 'status') return STATUS_LABELS[v] || v;
+        if (key === 'impact') return getImpactLabel(v);
+        if (key === 'points') return v === 'none' ? 'None' : `${v} pt${v === '1' ? '' : 's'}`;
+        if (key === 'assignee') return v === '@me' ? 'Me' : v === '@none' ? 'Unassigned' : memberName(v);
+        return v;
+    };
+    const groupLabel = { status: 'Status', impact: 'Priority', subject: 'Subject', points: 'Points', milestone: 'Milestone', assignee: 'Assignee', tags: 'Tag' };
+    const chips = [];
+    if (filters.q.trim()) chips.push(`<button type="button" data-action="removeFilter" data-key="q" class="${chipCls(true)}" aria-label="Remove search ${esc(filters.q)}">Search: “${esc(filters.q)}” ✕</button>`);
+    FILTER_GROUPS.forEach(k => filters[k].forEach(v => chips.push(
+        `<button type="button" data-action="removeFilter" data-key="${k}" data-value="${esc(v)}" class="${chipCls(true)}" aria-label="Remove filter ${esc(groupLabel[k])} ${esc(labelOf(k, v))}">${esc(groupLabel[k])}: ${esc(labelOf(k, v))} ✕</button>`)));
+    $('activeFilters').innerHTML = `
+        <span class="font-medium">Showing ${shown} of ${issues.length}</span>
+        ${chips.join('')}
+        ${chips.length ? `<button type="button" data-action="clearFilters" class="underline hover:text-blue-600 ml-1">Clear all</button>` : ''}`;
+
+    if (focusKey) {
+        const [action, key, value, view] = focusKey;
+        const sel = `[data-action="${action}"]` + (key ? `[data-key="${CSS.escape(key)}"]` : '') + (value ? `[data-value="${CSS.escape(value)}"]` : '') + (view ? `[data-view="${CSS.escape(view)}"]` : '');
+        const el = document.querySelector(sel) || (action === 'removeFilter' ? document.querySelector('[data-action="removeFilter"], [data-action="clearFilters"]') || $('filtersBtn') : null);
+        if (el && el !== document.activeElement) el.focus();
+    }
 }
 
 const btnCls = 'text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-white transition';
@@ -630,18 +756,13 @@ function renderIssues() {
     selectedIssues.forEach(id => { if (!ids.has(id)) selectedIssues.delete(id); });
     updateBulkActionBar();
 
-    updateMilestoneFilter();
-    const filtered = filterIssues(issues, {
-        status: $('filterStatus').value,
-        impact: $('filterImpact').value,
-        milestone: $('filterMilestone').value,
-        assignee: $('filterAssignee').value,
-        sort: $('sortBy').value,
-        me: myEmail(),
-        query: $('searchBar').value
-    });
+    updateMilestoneList();
+    const filtered = filterIssues(issues, filters, myEmail());
+    renderFilterUI(filtered.length);
 
-    const empty = `<p class="text-gray-500 dark:text-gray-400 italic mt-4">${issues.length ? 'No issues match current filters.' : 'No issues yet. Log one to get started!'}</p>`;
+    const empty = `<p class="text-gray-500 dark:text-gray-400 italic mt-4">${issues.length
+        ? 'No issues match these filters. <button type="button" data-action="clearFilters" class="underline not-italic hover:text-blue-600">Clear all filters</button>'
+        : 'No issues yet. Log one to get started!'}</p>`;
     if (isKanban) {
         const columns = { open: [], in_progress: [], fixed: [] };
         filtered.forEach(i => columns[i.status].push(buildIssueCardHTML(i)));
@@ -1090,6 +1211,12 @@ const actions = {
     editNote: (el) => openNoteModal(el.dataset.id, el.dataset.note),
     deleteNote: (el) => deleteNote(el.dataset.id, el.dataset.note),
     copyIssue: (el) => copyIssue(el.dataset.id),
+    toggleFilters: () => { filterPanelOpen = !filterPanelOpen; try { localStorage.setItem('filterPanel', filterPanelOpen ? '1' : ''); } catch (e) {} renderIssues(); },
+    toggleFilter: (el) => toggleFilterValue(el.dataset.key, el.dataset.value),
+    removeFilter: (el) => el.dataset.key === 'q' ? setFilters({ ...filters, q: '' }) : toggleFilterValue(el.dataset.key, el.dataset.value),
+    clearFilters: () => setFilters({ ...EMPTY_FILTERS, sort: filters.sort, rev: filters.rev }),
+    quickView: (el) => setFilters({ ...QUICK_VIEWS[el.dataset.view].filters, q: filters.q }),
+    toggleSortDir: () => setFilters({ ...filters, rev: !filters.rev }),
     forgetGeminiKey: () => { try { localStorage.removeItem('gemini_api_key'); } catch (e) {} toast('Gemini key removed from this browser.'); }
 };
 
@@ -1110,15 +1237,27 @@ $('projectSelect').addEventListener('change', (e) => {
     if (isOnline()) subscribeIssues(); else localStore.load();
 });
 
-['filterStatus', 'filterImpact', 'filterMilestone', 'filterAssignee'].forEach(id => $(id).addEventListener('change', renderIssues));
-$('sortBy').addEventListener('change', () => {
-    try { localStorage.setItem('sort', $('sortBy').value); } catch (e) {}
-    renderIssues();
+$('sortBy').addEventListener('change', () => setFilters({ ...filters, sort: $('sortBy').value }));
+
+let searchTimer = null;
+$('searchBar').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => setFilters({ ...filters, q: $('searchBar').value }), 150);
 });
-$('searchBar').addEventListener('input', renderIssues);
+$('searchBar').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('searchBar').value) { e.preventDefault(); setFilters({ ...filters, q: '' }); }
+});
+
+// "/" focuses search (like many web apps), unless you're typing somewhere
+document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || openModalEl()) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+    e.preventDefault();
+    $('searchBar').focus();
+});
 
 // --- Initial render ---
+try { filterPanelOpen = localStorage.getItem('filterPanel') === '1'; } catch (e) {}
 try { if (localStorage.getItem('view') === 'kanban') toggleView(); } catch (e) {}
-try { const s = localStorage.getItem('sort'); if (SORTS.includes(s)) $('sortBy').value = s; } catch (e) {}
 if (!auth) localStore.load();
 else renderIssues();

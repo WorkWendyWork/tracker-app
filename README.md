@@ -80,6 +80,13 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
   Without the function, the ✨ button asks each person for their own Gemini key and stores it only in their browser (ℹ️ Share → *Forget my Gemini key* removes it).
 - **Daily backups:** in Google Cloud Console create a service account with the *Cloud Datastore User* role, create a JSON key, and save it as the repository secret `FIREBASE_SERVICE_ACCOUNT`. The *Daily backup* workflow then saves the database as a downloadable artifact every day (kept 90 days). You can also run it manually from the Actions tab.
 
+## Search & filters
+- **Search** matches all words across the description, subject, tags, milestone, assignee and notes. Use `"quotes"` for an exact phrase and `-word` to exclude. Press <kbd>/</kbd> to jump to the search box and <kbd>Esc</kbd> to clear it.
+- **🎛️ Filters** opens a panel where you can pick several values per group (Status, Priority, Subject, Story points, Milestone, Assignee, Tags). Values in one group are combined with *or*, groups with *and*. Each option shows how many issues it matches.
+- **Quick views:** All issues, My open, Urgent, Unassigned, Recently fixed.
+- **Sort** by priority, subject, bug number or recently updated; **↓/↑** reverses the order.
+- Filters are kept in the page address, so you can **bookmark or share a link** to an exact view. They're also remembered in your browser.
+
 ## Security notes
 - All user text is escaped and Markdown is sanitized with DOMPurify.
 - A Content Security Policy forbids inline scripts and limits where code and data can come from.
