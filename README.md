@@ -83,6 +83,10 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
 ## AI suggestions
 Type a description and click **✨ AI Category**. Gemini fills in the subject, priority, story points and tags, plus the milestone if one clearly fits. It picks from your team's own subjects, milestones and existing tags. Tags you already typed are kept, and nothing is saved until you click **Save Issue**.
 
+Subjects are always **one topic** (for example "Audio" or "Save System", never "UI & Navigation"). If no existing subject fits, the AI proposes a new one, marked *(new)* in the form. It's added to the team's list when you save the bug, and then shows up in the filters.
+
+**🤖 Reorganize with AI** (in ⚙️ Settings → Subjects) cleans up an existing backlog. The AI reads every bug in every project, proposes a list of single-topic subjects, and suggests a subject and tags for each bug. You review a preview, untick anything you disagree with, then apply. Each change is recorded in the bug's history.
+
 The app asks Google which Gemini models your key can use and picks the newest "flash" model automatically, so it keeps working when Google retires a model.
 
 ## Settings (⚙️)

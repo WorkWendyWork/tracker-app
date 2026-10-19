@@ -206,13 +206,65 @@ test('categorize prompt includes the team choices and asks for every field', () 
 test('parseAiSuggestion keeps only valid values', () => {
     const ctx = { subjects: ['Audio', 'Netcode'], milestones: ['Alpha v1'], tags: ['Crash', 'ui'] };
     assert.deepEqual(lib.parseAiSuggestion({ subject: 'audio', impact: 1, points: '5', tags: ['crash', 'New Tag', 'crash', 'a,b'], milestone: 'alpha v1' }, ctx), {
-        subject: 'Audio', impact: '1', points: '5', tags: ['Crash', 'new tag', 'a b'], milestone: 'Alpha v1'
+        subject: 'Audio', newSubject: false, impact: '1', points: '5', tags: ['Crash', 'new tag', 'a b'], milestone: 'Alpha v1'
     });
-    assert.deepEqual(lib.parseAiSuggestion({ subject: 'Graphics', impact: '9', points: '4', tags: [], milestone: 'Beta' }, ctx), {
-        subject: null, impact: null, points: null, tags: null, milestone: null
+    assert.deepEqual(lib.parseAiSuggestion({ subject: 'Graphics & VFX', impact: '9', points: '4', tags: [], milestone: 'Beta' }, ctx), {
+        subject: null, newSubject: false, impact: null, points: null, tags: null, milestone: null
     });
     assert.deepEqual(lib.parseAiSuggestion({ tags: 'one, two, three, four, five' }, ctx).tags, ['one', 'two', 'three', 'four']);
     assert.deepEqual(lib.parseAiSuggestion(null, ctx).subject, null);
+});
+
+test('single-topic subjects', () => {
+    for (const ok of ['Audio', 'Save System', 'Combat AI', 'UI']) assert.equal(lib.isSingleSubject(ok), true, ok);
+    for (const bad of ['UI & Navigation', 'Technical / Architecture', 'Audio and Music', 'A', 'Too Many Words Here', 'x,y', 'Graphics + VFX', 'x'.repeat(31)]) {
+        assert.equal(lib.isSingleSubject(bad), false, bad);
+    }
+    assert.equal(lib.cleanSubjectName('  save   system '), 'Save System');
+    assert.equal(lib.cleanSubjectName('ÉCRAN titre'), 'ÉCRAN Titre');
+});
+
+test('AI may invent a new single-topic subject, never a combined one', () => {
+    const ctx = { subjects: ['Audio', 'Combat'], tags: [] };
+    assert.deepEqual(
+        [lib.parseAiSuggestion({ subject: 'combat' }, ctx).subject, lib.parseAiSuggestion({ subject: 'combat' }, ctx).newSubject],
+        ['Combat', false]);
+    const fresh = lib.parseAiSuggestion({ subject: 'save system' }, ctx);
+    assert.equal(fresh.subject, 'Save System');
+    assert.equal(fresh.newSubject, true);
+    assert.equal(lib.parseAiSuggestion({ subject: 'Save & Load' }, ctx).subject, null);
+    assert.match(lib.buildCategorizePrompt('x', ctx), /create a NEW subject/);
+    assert.match(lib.buildCategorizePrompt('x', ctx), /Never combine two topics/);
+});
+
+test('reorganize: taxonomy prompt and parsing', () => {
+    const items = [{ i: 0, text: 'Sound cuts out' }, { i: 1, text: 'Menu "overlaps"' }];
+    const p = lib.buildTaxonomyPrompt(items, ['UI & Navigation']);
+    assert.match(p, /\["UI & Navigation"\]/);
+    assert.match(p, /\{"i":1,"text":"Menu \\"overlaps\\""\}/);
+    assert.match(p, /"subjects"/);
+    assert.deepEqual(lib.parseTaxonomy({ subjects: ['audio', 'UI & Navigation', 'Audio', 'Menus', 'save   system'] }), ['Audio', 'Menus', 'Save System']);
+    assert.deepEqual(lib.parseTaxonomy(null), []);
+    assert.equal(lib.parseTaxonomy({ subjects: Array.from({ length: 30 }, (_, k) => 'Topic ' + k) }).length, 15);
+    assert.equal(lib.organizeText({ desc: 'a\n\n b'.padEnd(500, 'x'), tags: 'ui' }).startsWith('a b'), true);
+    assert.match(lib.organizeText({ desc: 'x', tags: 'ui, crash' }), /\[tags: ui, crash\]$/);
+});
+
+test('reorganize: assignment parsing keeps only valid answers', () => {
+    const subjects = ['Audio', 'Menus'];
+    const raw = { assignments: [
+        { i: 0, subject: 'audio', tags: ['sound', 'Crash'] },
+        { i: 1, subject: 'Graphics', tags: [] },        // not in list -> dropped
+        { i: 2, subject: 'Menus' },
+        { i: 0, subject: 'Menus' },                     // duplicate -> first wins
+        { i: 9, subject: 'Audio' }                      // unknown id -> dropped
+    ] };
+    const m = lib.parseAssignments(raw, [0, 1, 2], subjects, ['crash']);
+    assert.deepEqual([...m.keys()], [0, 2]);
+    assert.deepEqual(m.get(0), { subject: 'Audio', tags: ['sound', 'crash'] });
+    assert.deepEqual(m.get(2), { subject: 'Menus', tags: [] });
+    assert.equal(lib.parseAssignments(null, [0], subjects).size, 0);
+    assert.match(lib.buildAssignPrompt([{ i: 0, text: 't' }], subjects, ['crash']), /EXACTLY one of these per bug\): \["Audio", "Menus"\]/);
 });
 
 test('pickGeminiModel chooses the newest stable flash model', () => {

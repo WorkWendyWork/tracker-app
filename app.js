@@ -178,6 +178,10 @@ const localStore = {
         updateSubjectOptions();
         renderIssues();
     },
+    // Every issue in every project: [{ project, issue }]
+    async allIssues() {
+        return Object.entries(local.issues).flatMap(([project, arr]) => (arr || []).map(raw => ({ project, issue: sanitizeIssue(raw) })));
+    },
     // Applies fn(issue) -> changed fields | null to every issue in every project.
     rewriteIssues(fn) {
         let n = 0;
@@ -350,6 +354,14 @@ const cloudStore = {
         updateSubjectOptions();
         renderIssues();
         try { await metaRef('config').set(cfg); } catch (e) { handleCloudError(e, 'Settings error:'); }
+    },
+    async allIssues() {
+        const out = [];
+        for (const project of projects) {
+            const snap = await issuesCol(project).get();
+            snap.docs.forEach(d => out.push({ project, issue: sanitizeIssue({ ...d.data(), id: d.id }) }));
+        }
+        return out;
     },
     async rewriteIssues(fn) {
         let n = 0;
@@ -617,14 +629,23 @@ function updateSubjectOptions() {
     if (cur) { ensureSubjectOption(cur); sel.value = cur; }
 }
 
-// Keeps an issue's subject selectable even if it was removed from the list.
-function ensureSubjectOption(subject) {
+// Keeps a subject selectable even if it isn't in the team list (yet).
+function ensureSubjectOption(subject, isNew) {
     const sel = $('subject');
     if (!subject || [...sel.options].some(o => o.value === subject)) return;
     const opt = document.createElement('option');
     opt.value = subject;
-    opt.textContent = `${subject} (not in list)`;
+    opt.textContent = `${subject} ${isNew ? '(new)' : '(not in list)'}`;
     sel.appendChild(opt);
+}
+
+// A subject the AI invented becomes part of the team list once a bug uses it.
+const aiNewSubjects = new Set();
+function adoptSubject(subject) {
+    if (!subject || config.subjects.some(s => s.toLowerCase() === subject.toLowerCase())) return;
+    if (!isSingleSubject(subject)) return; // old combined subjects aren't re-added
+    store().saveConfig(sanitizeConfig({ ...config, subjects: [...config.subjects, subject] }));
+    toast(`Added new subject “${subject}”.`);
 }
 
 // ==========================================
@@ -662,7 +683,10 @@ function renderSettings() {
         <section class="space-y-2" aria-labelledby="set-${list}">
             <div class="flex items-center justify-between gap-2">
                 <h3 id="set-${list}" class="font-bold text-gray-800 dark:text-white">${s.title}</h3>
-                ${s.add ? `<button type="button" data-action="settingsAdd" data-list="${list}" class="${btn}">➕ Add</button>` : ''}
+                <div class="flex gap-1.5">
+                    ${list === 'subjects' ? `<button type="button" data-action="openOrganize" class="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:hover:bg-blue-800/60" title="Let AI propose single-topic subjects and re-sort all bugs">🤖 Reorganize with AI</button>` : ''}
+                    ${s.add ? `<button type="button" data-action="settingsAdd" data-list="${list}" class="${btn}">➕ Add</button>` : ''}
+                </div>
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400">${s.hint} Counts are for the current project.</p>
             ${rows.length ? `<ul class="space-y-1.5">${rows.map((r, k) => `
@@ -708,6 +732,157 @@ function settingsDelete(list, idx) {
     if (!r.orig) settingsDraft[list].splice(idx, 1); // new, unsaved row: just drop it
     else r.deleted = !r.deleted;
     renderSettings();
+}
+
+// ==========================================
+// 🤖 Reorganize with AI
+// Step 1 designs a clean single-topic subject list from the bugs,
+// step 2 assigns every bug a subject (+ tags). Nothing changes until Apply.
+// ==========================================
+let organizePlan = null; // { subjects, rows: [{ project, issue, subject, addTags, on }], skipped, total }
+
+function organizeUI(status, mainLabel, mainAction, busy) {
+    $('organizeStatus').innerText = status || '';
+    const b = $('organizeMain');
+    b.innerText = mainLabel;
+    b.dataset.action = mainAction;
+    b.disabled = !!busy;
+}
+
+function openOrganize() {
+    closeModals();
+    organizePlan = null;
+    $('organizeBody').innerHTML = `
+        <p>The AI reads <b>all bugs in all projects</b>, proposes a clean list of <b>single-topic subjects</b>
+        (no more “X &amp; Y”), and suggests a subject and tags for every bug.</p>
+        <ul class="list-disc pl-5 space-y-1 text-gray-600 dark:text-gray-400">
+            <li>You see a preview first and can untick any bug before applying.</li>
+            <li>Applying replaces the subject list in ⚙️ Settings and records the change in each bug's history.</li>
+            <li>Bug descriptions are sent to Google Gemini.</li>
+        </ul>`;
+    organizeUI('', 'Start', 'startOrganize');
+    openModal('organizeModal', 'organizeMain');
+}
+
+// Same AI path as ✨: team server function first, personal key as fallback.
+async function organizeAsk(step, payload, promptText) {
+    return (await callAiFunction('organize', { step, ...payload }, 120000)) || (await askGemini(promptText));
+}
+
+async function startOrganize() {
+    try {
+        organizeUI('Reading bugs…', 'Working…', 'startOrganize', true);
+        const all = (await store().allIssues()).filter(x => x.issue.desc.trim());
+        if (all.length < 2) { organizeUI('There are not enough bugs to organize yet.', 'Start', 'startOrganize'); return; }
+        const items = all.map((x, i) => ({ i, text: organizeText(x.issue) }));
+        const tags = tagsOf(all.map(x => x.issue));
+
+        // Step 1: subject list from an evenly spread sample
+        const sampleSize = Math.min(items.length, ORGANIZE_SAMPLE);
+        organizeUI(`Step 1 of 2: designing subjects from ${sampleSize} bugs…`, 'Working…', 'startOrganize', true);
+        const stride = items.length / sampleSize;
+        const sample = Array.from({ length: sampleSize }, (_, k) => items[Math.floor(k * stride)]);
+        const raw = await organizeAsk('taxonomy', { items: sample, subjects: config.subjects }, buildTaxonomyPrompt(sample, config.subjects));
+        if (!raw) { organizeUI('', 'Start', 'startOrganize'); return; } // key prompt cancelled
+        const subjects = parseTaxonomy(raw);
+        if (subjects.length < 2) throw new Error('The AI did not return a usable subject list. Try again.');
+
+        // Step 2: assign every bug, in batches; one retry for any it skipped
+        const assigned = new Map();
+        for (let pass = 0; pass < 2 && assigned.size < items.length; pass++) {
+            const todo = chunk(items.filter(it => !assigned.has(it.i)), ORGANIZE_BATCH);
+            for (let b = 0; b < todo.length; b++) {
+                organizeUI(`Step 2 of 2: sorting bugs ${pass ? '(retry) ' : ''}— batch ${b + 1} of ${todo.length}…`, 'Working…', 'startOrganize', true);
+                const res = await organizeAsk('assign', { items: todo[b], subjects, tags }, buildAssignPrompt(todo[b], subjects, tags));
+                parseAssignments(res, todo[b].map(it => it.i), subjects, tags).forEach((v, k) => assigned.set(k, v));
+            }
+        }
+
+        organizePlan = {
+            subjects,
+            rows: all.map((x, i) => {
+                const a = assigned.get(i);
+                if (!a) return null;
+                const have = parseTags(x.issue.tags).map(t => t.toLowerCase());
+                const addTags = a.tags.filter(t => !have.includes(t.toLowerCase()));
+                if (a.subject === x.issue.subject && !addTags.length) return null;
+                return { project: x.project, issue: x.issue, subject: a.subject, addTags, on: true };
+            }).filter(Boolean),
+            all: all.map(x => x.issue),
+            skipped: items.length - assigned.size,
+            total: items.length
+        };
+        renderOrganizePreview();
+    } catch (e) {
+        console.error('Organize error:', e);
+        organizeUI(e.message || 'Something went wrong.', 'Try again', 'startOrganize');
+    }
+}
+
+function renderOrganizePreview() {
+    const p = organizePlan;
+    const multi = new Set(p.rows.map(r => r.project)).size > 1;
+    const on = p.rows.filter(r => r.on).length;
+    const counts = p.rows.reduce((m, r) => { m[r.subject] = (m[r.subject] || 0) + 1; return m; }, {});
+    $('organizeBody').innerHTML = `
+        <div>
+            <h3 class="font-bold mb-1.5">New subjects (${p.subjects.length})</h3>
+            <div class="flex flex-wrap gap-1.5">${p.subjects.map(s => `<span class="text-xs px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200">${esc(s)} <span class="opacity-70">${counts[s] || 0}</span></span>`).join('')}</div>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Numbers show how many bugs move into each subject. You can rename or reorder subjects afterwards in ⚙️ Settings.</p>
+        </div>
+        <div>
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+                <h3 class="font-bold">Changes (${on} of ${p.rows.length} selected)</h3>
+                <div class="text-xs flex gap-3">
+                    <button type="button" data-action="organizeAll" data-on="1" class="underline hover:text-blue-600">Select all</button>
+                    <button type="button" data-action="organizeAll" data-on="0" class="underline hover:text-blue-600">Select none</button>
+                </div>
+            </div>
+            ${p.rows.length ? `<ul class="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded">
+                ${p.rows.map((r, k) => `
+                <li class="flex gap-3 items-start p-2 ${r.on ? '' : 'opacity-50'}">
+                    <input type="checkbox" data-action="organizeToggle" data-idx="${k}" ${r.on ? 'checked' : ''} class="mt-1 w-4 h-4" aria-label="Apply change to ${esc(r.issue.tag || 'new issue')}">
+                    <div class="min-w-0 flex-1">
+                        <div class="text-xs text-gray-500 dark:text-gray-400 font-mono">${esc(r.issue.tag || 'NEW')}${multi ? ` · ${esc(r.project)}` : ''}</div>
+                        <div class="truncate" title="${esc(r.issue.desc)}">${esc(r.issue.desc)}</div>
+                        <div class="text-xs mt-0.5">
+                            ${r.subject !== r.issue.subject
+                                ? `<span class="line-through opacity-60">${esc(r.issue.subject)}</span> → <b class="text-blue-700 dark:text-blue-300">${esc(r.subject)}</b>`
+                                : `<span class="opacity-60">${esc(r.subject)} (unchanged)</span>`}
+                            ${r.addTags.length ? ` · tags + ${r.addTags.map(esc).join(', ')}` : ''}
+                        </div>
+                    </div>
+                </li>`).join('')}
+            </ul>` : '<p class="italic text-gray-500">Every bug already fits the new subjects.</p>'}
+            ${p.skipped ? `<p class="text-xs text-amber-600 dark:text-amber-400 mt-2">The AI skipped ${p.skipped} bug(s); they keep their current subject.</p>` : ''}
+        </div>`;
+    organizeUI(`${p.total} bugs analysed.`, `Apply to ${on} bug${on === 1 ? '' : 's'}`, 'applyOrganize');
+}
+
+async function applyOrganize() {
+    const p = organizePlan;
+    const chosen = new Map(p.rows.filter(r => r.on).map(r => [r.issue.id, r]));
+    if (!confirm(`Replace the subject list with ${p.subjects.length} new subjects and update ${chosen.size} bug(s)?`)) return;
+    organizeUI('Applying…', 'Working…', 'applyOrganize', true);
+    // Keep single-topic subjects that bugs left unchanged still use (combined ones are dropped)
+    const stillUsed = p.all.filter(i => !chosen.has(i.id)).map(i => i.subject)
+        .filter(s => isSingleSubject(s) && !p.subjects.some(x => x.toLowerCase() === s.toLowerCase()));
+    await store().saveConfig(sanitizeConfig({ ...config, subjects: [...p.subjects, ...new Set(stillUsed)] }));
+    const n = chosen.size ? await store().rewriteIssues(i => {
+        const r = chosen.get(i.id);
+        if (!r) return null;
+        const out = {};
+        if (r.subject !== i.subject) out.subject = r.subject;
+        if (r.addTags.length) {
+            const merged = parseTags(i.tags);
+            r.addTags.forEach(t => { if (!merged.some(m => m.toLowerCase() === t.toLowerCase())) merged.push(t); });
+            out.tags = clip(merged.join(', '), LIMITS.tags);
+        }
+        return Object.keys(out).length ? out : null;
+    }) : 0;
+    organizePlan = null;
+    closeModals();
+    toast(`Subjects reorganized. ${n} bug${n === 1 ? '' : 's'} updated.`);
 }
 
 async function saveSettings() {
@@ -1010,6 +1185,9 @@ $('issueForm').addEventListener('submit', (e) => {
         assignee: $('assignee').value,
         tags: $('tags').value
     };
+    // Only subjects the AI proposed in this form get added to the team list
+    if (aiNewSubjects.has(fields.subject)) adoptSubject(fields.subject);
+    aiNewSubjects.clear();
     clearForm();
     if (id) {
         store().update(id, fields);
@@ -1254,7 +1432,12 @@ function aiContext() {
 // Fills every field the AI gave a valid answer for. Returns what changed.
 function applySuggestion(s) {
     const changed = [];
-    if (s.subject) { ensureSubjectOption(s.subject); $('subject').value = s.subject; changed.push('subject'); }
+    if (s.subject) {
+        ensureSubjectOption(s.subject, s.newSubject);
+        if (s.newSubject) aiNewSubjects.add(s.subject);
+        $('subject').value = s.subject;
+        changed.push(s.newSubject ? `new subject “${s.subject}”` : 'subject');
+    }
     if (s.impact) { $('impact').value = s.impact; changed.push('priority'); }
     if (s.points) { $('points').value = s.points; changed.push('points'); }
     if (s.tags) {
@@ -1270,10 +1453,10 @@ function applySuggestion(s) {
 
 // Preferred: the team's server function (key never reaches the browser).
 // Fallback: a personal Gemini key stored in this browser.
-async function categorizeViaFunction(desc, ctx) {
+async function callAiFunction(name, payload, timeout = 30000) {
     if (!isOnline() || !firebase.functions) return null;
     try {
-        const res = await firebase.functions().httpsCallable('categorize', { timeout: 30000 })({ desc, ...ctx });
+        const res = await firebase.functions().httpsCallable(name, { timeout })(payload);
         return res.data;
     } catch (e) {
         if (['functions/permission-denied', 'functions/unauthenticated', 'functions/invalid-argument', 'functions/resource-exhausted'].includes(e.code)) throw e;
@@ -1296,7 +1479,8 @@ async function geminiModel(key, refresh) {
     return model;
 }
 
-async function categorizeViaKey(desc, ctx) {
+// Sends a prompt to Gemini with the personal key and returns the parsed JSON answer.
+async function askGemini(promptText) {
     let key = null;
     try { key = localStorage.getItem('gemini_api_key'); } catch (e) {}
     if (!key) {
@@ -1310,7 +1494,7 @@ async function categorizeViaKey(desc, ctx) {
         return new Error("Gemini rejected the API key, so it was removed. Click ✨ again to enter a new one.");
     };
     const body = JSON.stringify({
-        contents: [{ parts: [{ text: buildCategorizePrompt(desc, ctx) }] }],
+        contents: [{ parts: [{ text: promptText }] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0.2 }
     });
     try {
@@ -1351,7 +1535,7 @@ async function autoCategorize() {
     btn.disabled = true;
     try {
         const ctx = aiContext();
-        const raw = (await categorizeViaFunction(desc, ctx)) || (await categorizeViaKey(desc, ctx));
+        const raw = (await callAiFunction('categorize', { desc, ...ctx })) || (await askGemini(buildCategorizePrompt(desc, ctx)));
         if (raw) {
             const changed = applySuggestion(parseAiSuggestion(raw, ctx));
             toast(changed.length ? `AI filled in: ${changed.join(', ')}. Check before saving.` : 'The AI had no usable suggestions.');
@@ -1466,6 +1650,11 @@ const actions = {
     settingsAdd: (el) => settingsAdd(el.dataset.list),
     settingsMove: (el) => settingsMove(el.dataset.list, Number(el.dataset.idx), Number(el.dataset.dir)),
     settingsDelete: (el) => settingsDelete(el.dataset.list, Number(el.dataset.idx)),
+    openOrganize: () => openOrganize(),
+    startOrganize: () => startOrganize(),
+    applyOrganize: () => applyOrganize(),
+    organizeAll: (el) => { organizePlan.rows.forEach(row => { row.on = el.dataset.on === '1'; }); renderOrganizePreview(); },
+    organizeToggle: (el) => { const row = organizePlan.rows[Number(el.dataset.idx)]; row.on = !row.on; renderOrganizePreview(); },
     closeModals: () => closeModals(),
     exportData: () => exportData(),
     pickImport: () => $('importFile').click(),

@@ -268,17 +268,31 @@ function withHistory(history, by, text, at = Date.now()) {
 // AI suggestions (Gemini)
 // ctx = { subjects, milestones, tags } — the team's current choices.
 // ==========================================
+// A subject must be ONE topic: short, and not two things joined together.
+const SUBJECT_RULE = 'A subject is ONE topic of 1-3 words in Title Case (e.g. "Audio", "Save System", "Combat"). Never combine two topics with "&", "/", "+", "," or "and".';
+
+function isSingleSubject(name) {
+    const s = String(name ?? '').trim();
+    return s.length >= 2 && s.length <= 30 && s.split(/\s+/).length <= 3 && !/[&/+,|;]|\band\b/i.test(s);
+}
+
+// Tidies an AI-made subject name: trims, collapses spaces, capitalizes words.
+const cleanSubjectName = (name) => String(name ?? '').trim().replace(/\s+/g, ' ')
+    .replace(/(^|\s)(\p{Ll})/gu, (m, sp, c) => sp + c.toUpperCase()).slice(0, 30);
+
+const quoteList = (arr) => arr.map(s => JSON.stringify(s)).join(', ');
+
 function buildCategorizePrompt(desc, ctx = {}) {
     const subjects = (ctx.subjects && ctx.subjects.length ? ctx.subjects : SUBJECTS).slice(0, LIMITS.subjects);
     const milestones = (ctx.milestones || []).slice(0, LIMITS.milestones);
     const tags = (ctx.tags || []).slice(0, 100);
-    const q = (arr) => arr.map(s => JSON.stringify(s)).join(', ');
+    const q = quoteList;
     return [
         'You triage bug reports for a video game team.',
         `Bug report: ${JSON.stringify(clip(desc, 4000))}`,
         '',
         'Return ONLY a JSON object with these keys:',
-        `- "subject": exactly one of [${q(subjects)}]`,
+        `- "subject": the best fitting one of [${q(subjects)}]. If none of them is a good fit, create a NEW subject instead. ${SUBJECT_RULE}`,
         '- "impact": "1" (Critical: crash, data loss, blocks play), "2" (High), "3" (Medium) or "4" (Low: cosmetic, typo)',
         '- "points": story-point estimate of the fix effort, one of "1", "2", "3", "5", "8"',
         `- "tags": 1 to 4 short lowercase tags. Prefer existing tags: [${q(tags)}]. Only invent a new one if none fit.`,
@@ -300,13 +314,80 @@ function parseAiSuggestion(raw, ctx = {}) {
         .map(t => findCI(existingTags, t) || t.toLowerCase())
         .filter((t, k, arr) => arr.indexOf(t) === k)
         .slice(0, 4);
+    const known = findCI(subjects, r.subject);
+    const fresh = !known && isSingleSubject(r.subject) ? cleanSubjectName(r.subject) : null;
     return {
-        subject: findCI(subjects, r.subject) || null,
+        subject: known || fresh || null,
+        newSubject: !!fresh,
         impact: ['1', '2', '3', '4'].includes(String(r.impact)) ? String(r.impact) : null,
         points: POINTS.includes(String(r.points)) ? String(r.points) : null,
         tags: tags.length ? tags : null,
         milestone: findCI(ctx.milestones || [], r.milestone) || null
     };
+}
+
+// ==========================================
+// "Reorganize with AI": two steps.
+//  1. Taxonomy: read (a sample of) all bugs, propose a clean subject list.
+//  2. Assign: in batches, pick a subject (+ tags) for every bug.
+// Bugs are sent as { i, text } with short numeric ids to save tokens.
+// ==========================================
+const ORGANIZE_BATCH = 50;
+const ORGANIZE_SAMPLE = 200;
+
+// Short text for one bug: description plus its current tags.
+const organizeText = (issue) => clip(String(issue.desc || '').replace(/\s+/g, ' ').trim(), 300) +
+    (issue.tags ? ` [tags: ${clip(issue.tags, 80)}]` : '');
+
+function buildTaxonomyPrompt(items, currentSubjects = []) {
+    return [
+        'You organize the bug backlog of a video game team.',
+        `Their current subjects are: [${quoteList(currentSubjects)}]. Some combine two topics, which they do not want.`,
+        '',
+        `Propose a clean list of 4 to 15 subjects that together cover ALL of the bugs below. ${SUBJECT_RULE}`,
+        'Reuse a current subject when it is already a single topic. Split combined ones into separate subjects only if bugs need both.',
+        'Order the list from most to least important for the game.',
+        '',
+        'Bugs (JSON lines):',
+        ...items.map(it => JSON.stringify({ i: it.i, text: it.text })),
+        '',
+        'Return ONLY JSON: {"subjects": ["...", "..."]}'
+    ].join('\n');
+}
+
+function parseTaxonomy(raw) {
+    const list = raw && Array.isArray(raw.subjects) ? raw.subjects : [];
+    return list.filter(isSingleSubject).map(cleanSubjectName)
+        .filter((s, k, arr) => arr.findIndex(x => x.toLowerCase() === s.toLowerCase()) === k)
+        .slice(0, 15);
+}
+
+function buildAssignPrompt(items, subjects, tags = []) {
+    return [
+        'You organize the bug backlog of a video game team.',
+        `Subjects (use EXACTLY one of these per bug): [${quoteList(subjects)}]`,
+        `Existing tags (prefer these): [${quoteList(tags.slice(0, 150))}]`,
+        '',
+        'For every bug below choose the best subject and 1 to 4 short lowercase tags.',
+        '',
+        'Bugs (JSON lines):',
+        ...items.map(it => JSON.stringify({ i: it.i, text: it.text })),
+        '',
+        'Return ONLY JSON: {"assignments": [{"i": 0, "subject": "...", "tags": ["..."]}, ...]} with one entry per bug.'
+    ].join('\n');
+}
+
+// Returns Map(i -> { subject, tags }) for valid answers only.
+function parseAssignments(raw, ids, subjects, existingTags = []) {
+    const out = new Map();
+    const valid = new Set(ids);
+    (raw && Array.isArray(raw.assignments) ? raw.assignments : []).forEach(a => {
+        const i = Number(a && a.i);
+        if (!valid.has(i) || out.has(i)) return;
+        const s = parseAiSuggestion({ subject: a.subject, tags: a.tags }, { subjects, tags: existingTags });
+        if (s.subject && !s.newSubject) out.set(i, { subject: s.subject, tags: s.tags || [] });
+    });
+    return out;
 }
 
 // Picks the best available Gemini "flash" model from a models.list response,
@@ -350,6 +431,8 @@ if (typeof module !== 'undefined') {
         normalizeFilters, parseSearch, activeFilterCount, matchingQuickView, filtersToQuery, queryToFilters, tagsOf, progressPct, milestonesOf, formatDate,
         sanitizeIssue, validateImport, describeChanges, withHistory,
         sanitizeConfig, makeComparators, buildCategorizePrompt, parseAiSuggestion, pickGeminiModel,
+        isSingleSubject, cleanSubjectName, ORGANIZE_BATCH, ORGANIZE_SAMPLE, organizeText,
+        buildTaxonomyPrompt, parseTaxonomy, buildAssignPrompt, parseAssignments,
         checkImageFile, parseAiJson, chunk
     };
 }
