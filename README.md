@@ -39,11 +39,11 @@ Rules tests need Java 11+ (they start the Firebase emulator):
 ```bash
 npm run test:rules
 ```
-After adding or changing Tailwind classes, rebuild the stylesheet and commit it:
+After changing `app.js`, `lib.js`, `theme.js` or any styles, run the build and commit the result. It rebuilds `tailwind.css` and updates the file fingerprints (`?v=…`) in `index.html`, so browsers never mix old and new files after an update:
 ```bash
-npm run build:css
+npm run build
 ```
-GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.css` is up to date on every push.
+GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.css` and the fingerprints are up to date on every push.
 
 ## Setup
 
@@ -83,6 +83,7 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
 ## AI suggestions
 **Setup:** open **⚙️ Settings**, tab **✨ AI**, paste a free Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), click **Save key**, and check that **Test AI** shows ✅. The key stays in your browser only.
 
+- **Status indicator** (header, next to the sync badge): *AI: set up* / *AI ready* / a spinner with what it's doing (including batch progress) / *AI done* / *AI error*. Click the error to see why.
 - **Auto-fill new bugs** (on by default): after you save a new bug, the AI fills in every field you left untouched. A message tells you what it filled in.
 - **✨ AI fill** (toolbar): checks many bugs at once: only bugs with missing info, all unfinished bugs, all bugs, or all projects. It fills subject, priority, points, tags and milestone; you pick which. With *Only fill empty fields* on, anything already set is kept. Placeholder subjects like "Uncategorised" count as empty. You review every change before applying.
 - **✨ AI Category** (in the form): fills in the form right away.

@@ -20,9 +20,9 @@
     <title>Bug Tracker Pro</title>
     <meta name="description" content="Bug and issue tracker for game development with Kanban, milestones and cloud sync.">
     <!-- Apply saved theme before paint to avoid a flash -->
-    <script src="theme.js"></script>
+    <script src="theme.js?v=7f2ac245a6"></script>
     <!-- Tailwind CSS (pre-built: run `npm run build:css` after changing classes) -->
-    <link rel="stylesheet" href="tailwind.css">
+    <link rel="stylesheet" href="tailwind.css?v=f70508bb37">
     <!-- Third-party scripts are pinned and integrity-checked -->
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
@@ -47,6 +47,7 @@
                     <span aria-hidden="true">👾</span> Bug Tracker Pro
                 </h1>
                 <div id="syncStatus" role="status" class="text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-200 font-medium">Connecting...</div>
+                <button type="button" id="aiIndicator" data-action="aiIndicator" aria-live="polite" class="text-xs px-2 py-1 rounded font-medium bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400">✨ AI</button>
             </div>
 
             <div class="flex items-center gap-2">
@@ -290,6 +291,9 @@
             <h2 id="organizeTitle" class="text-lg font-bold text-gray-800 dark:text-white px-6 pt-5 pb-3">🤖 Reorganize subjects with AI</h2>
             <div id="organizeBody" class="px-6 pb-4 space-y-4 overflow-y-auto text-sm text-gray-700 dark:text-gray-200"></div>
             <div class="flex flex-wrap justify-between items-center gap-2 px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+                <div id="organizeProgress" class="hidden basis-full h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden" role="progressbar" aria-label="AI progress">
+                    <div id="organizeProgressBar" class="h-1.5 bg-blue-600 transition-all duration-300 w-0"></div>
+                </div>
                 <span id="organizeStatus" role="status" aria-live="polite" class="text-xs text-gray-500 dark:text-gray-400"></span>
                 <div class="flex gap-2 ml-auto">
                     <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition">Cancel</button>
@@ -329,7 +333,7 @@
         </form>
     </div>
 
-    <script src="lib.js"></script>
-    <script src="app.js"></script>
+    <script src="lib.js?v=62ee808db2"></script>
+    <script src="app.js?v=98b37c1424"></script>
 </body>
 </html>

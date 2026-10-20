@@ -4,13 +4,15 @@
   "private": true,
   "description": "Bug and issue tracker for game development with Kanban, milestones and Firebase cloud sync.",
   "scripts": {
+    "build": "npm run build:css && node scripts/stamp.mjs",
     "build:css": "tailwindcss -c tailwind.config.js -i src/input.css -o tailwind.css --minify",
     "watch:css": "tailwindcss -c tailwind.config.js -i src/input.css -o tailwind.css --watch",
     "test": "node --test \"tests/*.test.js\"",
     "test:rules": "firebase emulators:exec --only firestore --project demo-bug-tracker \"node --test tests/rules/*.test.js\"",
     "deploy:rules": "firebase deploy --only firestore:rules,storage",
     "deploy:functions": "firebase deploy --only functions",
-    "backup": "node scripts/backup.mjs"
+    "backup": "node scripts/backup.mjs",
+    "check:stamp": "node scripts/stamp.mjs --check"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "3.0.4",

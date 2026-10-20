@@ -23,6 +23,8 @@ jobs:
         run: |
           npm run build:css
           git diff --exit-code tailwind.css || (echo "::error::tailwind.css is stale. Run 'npm run build:css' and commit it." && exit 1)
+      - name: Check file fingerprints in index.html
+        run: npm run check:stamp
 
   rules:
     runs-on: ubuntu-latest

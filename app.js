@@ -558,6 +558,7 @@ try {
     auth = firebase.auth();
 
     auth.onAuthStateChanged(async user => {
+        renderAiIndicator();
         const btn = $('authBtn');
         if (unsubIssues) unsubIssues();
         unsubs.forEach(u => u());
@@ -793,6 +794,95 @@ function settingsDelete(list, idx) {
 // ==========================================
 let organizePlan = null; // { subjects, rows: [{ project, issue, subject, addTags, on }], skipped, total }
 
+// ==========================================
+// ✨ AI status indicator (header). Shows whether AI is set up, what it is
+// doing right now (with progress for batch jobs), and the last result.
+// ==========================================
+const aiState = { tasks: new Map(), seq: 0, result: null, error: '', timer: null };
+
+function aiTaskStart(label) {
+    const id = ++aiState.seq;
+    aiState.tasks.set(id, label);
+    aiState.result = null;
+    renderAiIndicator();
+    return {
+        update(text) { aiState.tasks.set(id, text); renderAiIndicator(); },
+        done(ok, error) {
+            aiState.tasks.delete(id);
+            clearTimeout(aiState.timer);
+            aiState.result = ok === null ? null : ok ? 'done' : 'error';
+            aiState.error = ok === false ? (error || 'Something went wrong.') : '';
+            if (ok) aiState.timer = setTimeout(() => { aiState.result = null; renderAiIndicator(); }, 4000);
+            renderAiIndicator();
+        }
+    };
+}
+
+// Runs fn(task) while the indicator shows `label`; errors are recorded and re-thrown.
+async function aiTask(label, fn) {
+    const t = aiTaskStart(label);
+    try {
+        const out = await fn(t);
+        t.done(true);
+        return out;
+    } catch (e) {
+        t.done(e.noKey ? null : false, e.userMessage || e.message); // "no key" is a setup hint, not an error
+        throw e;
+    }
+}
+
+function renderAiIndicator() {
+    const el = $('aiIndicator');
+    if (!el) return;
+    const base = 'text-xs px-2 py-1 rounded font-medium flex items-center gap-1.5 max-w-[16rem] transition';
+    const busy = [...aiState.tasks.values()];
+    let html, cls, title;
+    if (busy.length) {
+        html = `<span class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" aria-hidden="true"></span><span class="truncate">${esc(busy[busy.length - 1])}</span>${busy.length > 1 ? `<span class="opacity-75">+${busy.length - 1}</span>` : ''}`;
+        cls = 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200';
+        title = busy.join('\n');
+    } else if (aiState.result === 'error') {
+        html = '<span aria-hidden="true">⚠️</span><span>AI error</span>';
+        cls = 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200 hover:bg-red-200';
+        title = aiState.error + '\n(click for details)';
+    } else if (aiState.result === 'done') {
+        html = '<span aria-hidden="true">✨</span><span>AI done</span>';
+        cls = 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-200';
+        title = 'The last AI request finished.';
+    } else if (aiAvailable()) {
+        html = '<span class="inline-block w-2 h-2 rounded-full bg-green-500" aria-hidden="true"></span><span>AI ready</span>';
+        cls = 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600';
+        title = geminiKey() ? 'AI is set up with your Gemini key.' : 'AI uses the team server function (if deployed).';
+    } else {
+        html = '<span aria-hidden="true">✨</span><span>AI: set up</span>';
+        cls = 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600';
+        title = 'Add a Gemini key to use AI (click)';
+    }
+    el.className = `${base} ${cls}`;
+    el.innerHTML = html;
+    el.title = title;
+    el.setAttribute('aria-label', `AI status: ${el.innerText.trim()}`);
+}
+
+function aiIndicatorClick() {
+    if (aiState.tasks.size) return toast([...aiState.tasks.values()].join(' · '));
+    if (aiState.result === 'error') {
+        const msg = aiState.error;
+        aiState.result = null;
+        renderAiIndicator();
+        toast(msg, 'AI settings', () => openSettings('ai'), 10000);
+        return;
+    }
+    openSettings('ai');
+}
+
+// Progress bar in the AI fill / Reorganize window
+function organizeProgress(done, total) {
+    const show = total > 0 && done < total;
+    $('organizeProgress').classList.toggle('hidden', !show);
+    $('organizeProgressBar').style.width = `${total ? Math.round(done / total * 100) : 0}%`;
+}
+
 function organizeUI(status, mainLabel, mainAction, busy) {
     $('organizeStatus').innerText = status || '';
     const b = $('organizeMain');
@@ -823,20 +913,23 @@ async function organizeAsk(step, payload, promptText) {
 }
 
 async function startOrganize() {
+    const task = aiTaskStart('Reorganize: reading bugs…');
     try {
         organizeUI('Reading bugs…', 'Working…', 'startOrganize', true);
         const all = (await store().allIssues()).filter(x => x.issue.desc.trim());
-        if (all.length < 2) { organizeUI('There are not enough bugs to organize yet.', 'Start', 'startOrganize'); return; }
+        if (all.length < 2) { task.done(true); organizeUI('There are not enough bugs to organize yet.', 'Start', 'startOrganize'); return; }
         const items = all.map((x, i) => ({ i, text: organizeText(x.issue) }));
         const tags = tagsOf(all.map(x => x.issue));
 
         // Step 1: subject list from an evenly spread sample
         const sampleSize = Math.min(items.length, ORGANIZE_SAMPLE);
         organizeUI(`Step 1 of 2: designing subjects from ${sampleSize} bugs…`, 'Working…', 'startOrganize', true);
+        task.update('Reorganize: designing subjects');
+        organizeProgress(0, 1);
         const stride = items.length / sampleSize;
         const sample = Array.from({ length: sampleSize }, (_, k) => items[Math.floor(k * stride)]);
         const raw = await organizeAsk('taxonomy', { items: sample, subjects: config.subjects }, buildTaxonomyPrompt(sample, config.subjects));
-        if (!raw) { organizeUI('', 'Start', 'startOrganize'); return; } // key prompt cancelled
+        if (!raw) { task.done(null); organizeProgress(0, 0); organizeUI('', 'Start', 'startOrganize'); return; }
         const subjects = parseTaxonomy(raw);
         if (subjects.length < 2) throw new Error('The AI did not return a usable subject list. Try again.');
 
@@ -846,6 +939,8 @@ async function startOrganize() {
             const todo = chunk(items.filter(it => !assigned.has(it.i)), ORGANIZE_BATCH);
             for (let b = 0; b < todo.length; b++) {
                 organizeUI(`Step 2 of 2: sorting bugs ${pass ? '(retry) ' : ''}— batch ${b + 1} of ${todo.length}…`, 'Working…', 'startOrganize', true);
+                task.update(`Reorganize: batch ${b + 1} of ${todo.length}`);
+                organizeProgress(assigned.size, items.length);
                 const res = await organizeAsk('assign', { items: todo[b], subjects, tags }, buildAssignPrompt(todo[b], subjects, tags));
                 parseAssignments(res, todo[b].map(it => it.i), subjects, tags).forEach((v, k) => assigned.set(k, v));
             }
@@ -865,9 +960,13 @@ async function startOrganize() {
             skipped: items.length - assigned.size,
             total: items.length
         };
+        organizeProgress(0, 0);
+        task.done(true);
         renderOrganizePreview();
     } catch (e) {
         console.error('Organize error:', e);
+        organizeProgress(0, 0);
+        task.done(e.noKey ? null : false, e.userMessage || e.message);
         organizeUI(e.message || 'Something went wrong.', 'Try again', 'startOrganize');
     }
 }
@@ -980,6 +1079,7 @@ async function startAiFill() {
     const fields = FILL_FIELDS.filter(f => $('fill' + f[0].toUpperCase() + f.slice(1)).checked);
     const onlyEmpty = $('fillOnlyEmpty').checked;
     if (!fields.length) return toast('Pick at least one field to fill.');
+    const task = aiTaskStart('AI fill: reading bugs…');
     try {
         organizeUI('Reading bugs…', 'Working…', 'startAiFill', true);
         const subjects = subjectChoices();
@@ -987,7 +1087,7 @@ async function startAiFill() {
         const source = scope === 'projects' ? await store().allIssues() : issues.map(issue => ({ project: currentProject, issue }));
         const picked = source.filter(({ issue }) => issue.desc.trim() &&
             (scope === 'missing' ? needsAiFill(issue, subjects, milestones) : scope === 'open' ? issue.status !== 'fixed' : true));
-        if (!picked.length) { organizeUI('Nothing to do: every bug already has its info filled in.', 'Start', 'startAiFill'); return; }
+        if (!picked.length) { task.done(true); organizeUI('Nothing to do: every bug already has its info filled in.', 'Start', 'startAiFill'); return; }
 
         const ctx = { subjects, milestones, tags: tagsOf(source.map(x => x.issue)) };
         const items = picked.map((x, i) => ({ i, text: organizeText(x.issue) }));
@@ -996,6 +1096,8 @@ async function startAiFill() {
             const batches = chunk(items.filter(it => !results.has(it.i)), FILL_BATCH);
             for (let b = 0; b < batches.length; b++) {
                 organizeUI(`Asking the AI${pass ? ' again for skipped bugs' : ''}… batch ${b + 1} of ${batches.length} (${picked.length} bugs)`, 'Working…', 'startAiFill', true);
+                task.update(`AI fill: batch ${b + 1} of ${batches.length}`);
+                organizeProgress(results.size, items.length);
                 const raw = (await callAiFunction('organize', { step: 'fill', items: batches[b], ...ctx }, 120000)) || (await askGemini(buildFillPrompt(batches[b], ctx)));
                 parseFillResults(raw, batches[b].map(it => it.i), ctx).forEach((v, k) => results.set(k, v));
             }
@@ -1011,9 +1113,13 @@ async function startAiFill() {
             total: picked.length,
             skipped: picked.length - results.size
         };
+        organizeProgress(0, 0);
+        task.done(true);
         renderFillPreview();
     } catch (e) {
         console.error('AI fill error:', e);
+        organizeProgress(0, 0);
+        task.done(e.noKey ? null : false, e.userMessage || e.message);
         organizeUI(e.userMessage || e.message || 'Something went wrong.', 'Try again', 'startAiFill');
         if (e.noKey || e.badKey) { closeModals(); openSettings('ai'); toast(e.userMessage); }
     }
@@ -1795,6 +1901,7 @@ function saveAiKey() {
     lsSet('gemini_api_key', v);
     lsSet('gemini_model', '');
     renderAiSettings();
+    renderAiIndicator();
     testAi();
 }
 
@@ -1808,7 +1915,9 @@ async function autoFillNew(issue, touched) {
     const project = currentProject;
     try {
         const ctx = aiContext();
-        const raw = (await callAiFunction('categorize', { desc: issue.desc, ...ctx })) || (await askGemini(buildCategorizePrompt(issue.desc, ctx)));
+        const short = issue.desc.length > 24 ? issue.desc.slice(0, 24) + '…' : issue.desc;
+        const raw = await aiTask(`Filling in “${short}”`, async () =>
+            (await callAiFunction('categorize', { desc: issue.desc, ...ctx })) || (await askGemini(buildCategorizePrompt(issue.desc, ctx))));
         const sugg = parseAiSuggestion(raw, ctx);
         const fields = planFill(issue, sugg, { fields: FILL_FIELDS.filter(f => !touched.has(f)), onlyEmpty: false, subjects: subjectChoices() });
         // Milestone only when the user left it empty
@@ -1831,9 +1940,9 @@ async function testAi() {
     $('aiStatus').innerText = 'Testing…';
     $('aiStatus').className = 'text-xs text-gray-500 dark:text-gray-400';
     try {
-        const viaFn = await callAiFunction('categorize', { desc: 'Game crashes when I open the shop', ...aiContext() });
+        const viaFn = await aiTask('Testing AI…', () => callAiFunction('categorize', { desc: 'Game crashes when I open the shop', ...aiContext() }));
         if (viaFn) { $('aiStatus').innerText = '✅ Working (team server function).'; $('aiStatus').className = 'text-xs text-green-600 dark:text-green-400'; return; }
-        const { json, model } = await geminiGenerate('Reply with exactly this JSON: {"ok": true}');
+        const { json, model } = await aiTask('Testing AI…', () => geminiGenerate('Reply with exactly this JSON: {"ok": true}'));
         if (!json || json.ok !== true) throw aiError('Gemini answered, but not as expected.');
         $('aiStatus').innerText = `✅ Working. Model: ${model}`;
         $('aiStatus').className = 'text-xs text-green-600 dark:text-green-400';
@@ -1853,7 +1962,8 @@ async function autoCategorize() {
     btn.disabled = true;
     try {
         const ctx = aiContext();
-        const raw = (await callAiFunction('categorize', { desc, ...ctx })) || (await askGemini(buildCategorizePrompt(desc, ctx)));
+        const raw = await aiTask('Suggesting fields…', async () =>
+            (await callAiFunction('categorize', { desc, ...ctx })) || (await askGemini(buildCategorizePrompt(desc, ctx))));
         if (raw) {
             const changed = applySuggestion(parseAiSuggestion(raw, ctx));
             FILL_FIELDS.forEach(f => touchedFields.add(f));
@@ -1982,6 +2092,7 @@ const actions = {
     settingsDelete: (el) => settingsDelete(el.dataset.list, Number(el.dataset.idx)),
     openOrganize: () => openOrganize(),
     openAiFill: () => openAiFill(),
+    aiIndicator: () => aiIndicatorClick(),
     settingsTab: (el) => showSettingsTab(el.dataset.tab, true),
     startAiFill: () => startAiFill(),
     applyAiFill: () => applyAiFill(),
@@ -2016,7 +2127,7 @@ const actions = {
     quickView: (el) => setFilters({ ...QUICK_VIEWS[el.dataset.view].filters, q: filters.q, hideDone: filters.hideDone }),
     toggleHideDone: () => setFilters({ ...filters, hideDone: !filters.hideDone }),
     toggleSortDir: () => setFilters({ ...filters, rev: !filters.rev }),
-    forgetGeminiKey: () => { lsSet('gemini_api_key', ''); lsSet('gemini_model', ''); if ($('aiKeyInput')) renderAiSettings(); toast('Gemini key removed from this browser.'); },
+    forgetGeminiKey: () => { lsSet('gemini_api_key', ''); lsSet('gemini_model', ''); if ($('aiKeyInput')) renderAiSettings(); renderAiIndicator(); toast('Gemini key removed from this browser.'); },
     saveAiKey: () => saveAiKey(),
     testAi: () => testAi(),
 };
@@ -2059,6 +2170,7 @@ document.addEventListener('keydown', (e) => {
 
 // --- Initial render ---
 updateSubjectOptions();
+renderAiIndicator();
 try { filterPanelOpen = localStorage.getItem('filterPanel') === '1'; } catch (e) {}
 try { if (localStorage.getItem('view') === 'kanban') toggleView(); } catch (e) {}
 if (!auth) localStore.load();
