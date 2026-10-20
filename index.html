@@ -89,6 +89,7 @@
                     <button type="button" id="sortDirBtn" data-action="toggleSortDir" aria-pressed="false" title="Reverse sort order" aria-label="Reverse sort order" class="text-sm px-2.5 py-2 rounded-r border border-l-0 border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-800 dark:text-white">↓</button>
                 </div>
                 <div class="flex items-center gap-2 ml-auto">
+                    <button type="button" data-action="openAiFill" class="text-sm px-3 py-2 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/60 font-medium transition" title="Let AI fill in subject, priority, points, tags and milestone for all bugs">✨ AI fill</button>
                     <button type="button" data-action="exportData" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Download a JSON backup">⬇️ Export</button>
                     <button type="button" data-action="pickImport" class="text-sm px-3 py-2 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 font-medium transition" title="Restore from a JSON backup">⬆️ Import</button>
                     <input type="file" id="importFile" accept=".json,application/json" class="hidden" aria-label="Backup file to import">
@@ -248,7 +249,29 @@
     <div id="settingsModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-xl border border-gray-200 dark:border-gray-700 flex flex-col max-h-[90vh]">
             <h2 id="settingsTitle" class="text-lg font-bold text-gray-800 dark:text-white px-6 pt-5 pb-3">⚙️ Settings</h2>
-            <div id="settingsBody" class="px-6 pb-4 space-y-5 overflow-y-auto"></div>
+            <div class="px-6 pb-4 space-y-5 overflow-y-auto">
+                <section id="aiSettings" class="space-y-2" aria-labelledby="set-ai">
+                    <h3 id="set-ai" class="font-bold text-gray-800 dark:text-white">✨ AI</h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400">Uses Google Gemini. Get a free key at
+                        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="underline">aistudio.google.com/apikey</a>.
+                        The key is stored only in this browser.</p>
+                    <div class="flex flex-wrap items-center gap-1.5">
+                        <label for="aiKeyInput" class="sr-only">Gemini API key</label>
+                        <input id="aiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Gemini API key"
+                            class="flex-1 min-w-[12rem] bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded p-1.5 text-sm text-gray-800 dark:text-white outline-none focus:border-blue-500">
+                        <button type="button" data-action="saveAiKey" class="text-xs px-2.5 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-500 font-bold">Save key</button>
+                        <button type="button" data-action="testAi" class="text-xs px-2.5 py-1.5 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600">Test AI</button>
+                        <button type="button" data-action="forgetGeminiKey" class="text-xs px-2.5 py-1.5 rounded text-red-600 dark:text-red-400 hover:underline">Forget key</button>
+                    </div>
+                    <p id="aiStatus" role="status" aria-live="polite" class="text-xs text-gray-500 dark:text-gray-400"></p>
+                    <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200 cursor-pointer">
+                        <input id="aiAutoFill" type="checkbox" class="mt-0.5 w-4 h-4">
+                        <span>Auto-fill new bugs: after you save a new bug, AI fills in the fields you left untouched (subject, priority, points, tags, milestone).</span>
+                    </label>
+                </section>
+                <hr class="border-gray-200 dark:border-gray-700">
+                <div id="settingsBody" class="space-y-5"></div>
+            </div>
             <div class="flex justify-end gap-2 px-6 py-4 border-t border-gray-200 dark:border-gray-700">
                 <button type="button" data-action="closeModals" class="px-4 py-2 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition">Cancel</button>
                 <button type="button" data-action="saveSettings" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-500 transition font-bold">Save</button>

@@ -81,6 +81,12 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
 - **Daily backups:** in Google Cloud Console create a service account with the *Cloud Datastore User* role, create a JSON key, and save it as the repository secret `FIREBASE_SERVICE_ACCOUNT`. The *Daily backup* workflow then saves the database as a downloadable artifact every day (kept 90 days). You can also run it manually from the Actions tab.
 
 ## AI suggestions
+**Setup:** open **⚙️ Settings → ✨ AI**, paste a free Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), click **Save key**, and check that **Test AI** shows ✅. The key stays in your browser only.
+
+- **Auto-fill new bugs** (on by default): after you save a new bug, the AI fills in every field you left untouched. A message tells you what it filled in.
+- **✨ AI fill** (toolbar): checks many bugs at once: only bugs with missing info, all unfinished bugs, all bugs, or all projects. It fills subject, priority, points, tags and milestone; you pick which. With *Only fill empty fields* on, anything already set is kept. Placeholder subjects like "Uncategorised" count as empty. You review every change before applying.
+- **✨ AI Category** (in the form): fills in the form right away.
+
 Type a description and click **✨ AI Category**. Gemini fills in the subject, priority, story points and tags, plus the milestone if one clearly fits. It picks from your team's own subjects, milestones and existing tags. Tags you already typed are kept, and nothing is saved until you click **Save Issue**.
 
 Subjects are always **one topic** (for example "Audio" or "Save System", never "UI & Navigation"). If no existing subject fits, the AI proposes a new one, marked *(new)* in the form. It's added to the team's list when you save the bug, and then shows up in the filters.

@@ -627,10 +627,10 @@ function updateMilestoneList() {
 // Old combined subjects ("X & Y") are hidden once no bug here uses them.
 function subjectChoices() {
     const used = new Set(issues.map(i => i.subject.toLowerCase()));
-    const listed = config.subjects.filter(s => isSingleSubject(s) || used.has(s.toLowerCase()));
+    const listed = config.subjects.filter(s => !isPlaceholderSubject(s) && (isSingleSubject(s) || used.has(s.toLowerCase())));
     const known = new Set(listed.map(s => s.toLowerCase()));
     const extra = [...new Set(issues.map(i => i.subject))]
-        .filter(s => isSingleSubject(s) && !known.has(s.toLowerCase()))
+        .filter(s => isSingleSubject(s) && !isPlaceholderSubject(s) && !known.has(s.toLowerCase()))
         .sort((a, b) => a.localeCompare(b));
     const all = [...listed, ...extra];
     return all.length ? all : [...SUBJECTS];
@@ -671,7 +671,7 @@ function adoptSubject(subject) {
 // ==========================================
 let settingsDraft = null;
 
-function openSettings() {
+function openSettings(section) {
     const used = (fn) => issues.reduce((m, i) => { fn(i).forEach(v => m.set(v, (m.get(v) || 0) + 1)); return m; }, new Map());
     const subjectUse = used(i => [i.subject]);
     const milestoneUse = used(i => i.milestone ? [i.milestone] : []);
@@ -683,7 +683,9 @@ function openSettings() {
         tags: tagsOf(issues).map(t => row(t, tagUse.get(t.toLowerCase())))
     };
     renderSettings();
-    openModal('settingsModal');
+    renderAiSettings();
+    openModal('settingsModal', section === 'ai' ? 'aiKeyInput' : undefined);
+    if (section === 'ai') $('aiSettings').scrollIntoView({ block: 'start' });
 }
 
 const SETTINGS_SECTIONS = {
@@ -769,6 +771,7 @@ function organizeUI(status, mainLabel, mainAction, busy) {
 function openOrganize() {
     closeModals();
     organizePlan = null;
+    $('organizeTitle').innerText = '🤖 Reorganize subjects with AI';
     $('organizeBody').innerHTML = `
         <p>The AI reads <b>all bugs in all projects</b>, proposes a clean list of <b>single-topic subjects</b>
         (no more “X &amp; Y”), and suggests a subject and tags for every bug.</p>
@@ -900,6 +903,138 @@ async function applyOrganize() {
     organizePlan = null;
     closeModals();
     toast(`Subjects reorganized. ${n} bug${n === 1 ? '' : 's'} updated.`);
+}
+
+// ==========================================
+// ✨ AI fill: subject, priority, points, tags and milestone for many bugs
+// at once. Runs in batches, shows a preview, changes nothing until Apply.
+// Uses the same window as "Reorganize with AI".
+// ==========================================
+let fillPlan = null; // { rows: [{ project, issue, fields, newSubject, on }], total, skipped }
+const FIELD_LABELS = { subject: 'Subject', impact: 'Priority', points: 'Points', tags: 'Tags', milestone: 'Milestone' };
+
+function openAiFill() {
+    if (!aiAvailable()) return openSettings('ai');
+    closeModals();
+    fillPlan = null;
+    $('organizeTitle').innerText = '✨ AI fill: check all bugs';
+    const box = (id, label, checked) => `<label class="flex items-center gap-2"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} class="w-4 h-4"> ${label}</label>`;
+    $('organizeBody').innerHTML = `
+        <p>The AI reads your bugs and fills in <b>subject, priority, story points, tags and milestone</b>.
+        New single-topic subjects are created when nothing fits. You'll see every change before anything is saved.</p>
+        <fieldset class="space-y-1.5">
+            <legend class="font-bold mb-1">Which bugs</legend>
+            <label class="flex items-center gap-2"><input type="radio" name="fillScope" value="missing" checked class="w-4 h-4"> Only bugs with missing info</label>
+            <label class="flex items-center gap-2"><input type="radio" name="fillScope" value="open" class="w-4 h-4"> All unfinished bugs</label>
+            <label class="flex items-center gap-2"><input type="radio" name="fillScope" value="all" class="w-4 h-4"> All bugs</label>
+            <label class="flex items-center gap-2"><input type="radio" name="fillScope" value="projects" class="w-4 h-4"> All bugs in all projects</label>
+        </fieldset>
+        <fieldset class="space-y-1.5">
+            <legend class="font-bold mb-1">What to fill</legend>
+            <div class="flex flex-wrap gap-x-4 gap-y-1.5">
+                ${box('fillSubject', 'Subject', true)}${box('fillImpact', 'Priority', true)}${box('fillPoints', 'Story points', true)}${box('fillTags', 'Tags', true)}${box('fillMilestone', 'Milestone', true)}
+            </div>
+            ${box('fillOnlyEmpty', 'Only fill empty fields (keep everything already set)', true)}
+            <p class="text-xs text-gray-500 dark:text-gray-400">With “only empty” on, priority is kept and subjects are only replaced when they're missing or not in your subject list.</p>
+        </fieldset>
+        <p class="text-xs text-gray-500 dark:text-gray-400">Bug descriptions are sent to Google Gemini.</p>`;
+    organizeUI('', 'Start', 'startAiFill');
+    openModal('organizeModal', 'organizeMain');
+}
+
+async function startAiFill() {
+    const scope = (document.querySelector('[name="fillScope"]:checked') || {}).value || 'missing';
+    const fields = FILL_FIELDS.filter(f => $('fill' + f[0].toUpperCase() + f.slice(1)).checked);
+    const onlyEmpty = $('fillOnlyEmpty').checked;
+    if (!fields.length) return toast('Pick at least one field to fill.');
+    try {
+        organizeUI('Reading bugs…', 'Working…', 'startAiFill', true);
+        const subjects = subjectChoices();
+        const milestones = [...new Set([...config.milestones, ...milestonesOf(issues)])];
+        const source = scope === 'projects' ? await store().allIssues() : issues.map(issue => ({ project: currentProject, issue }));
+        const picked = source.filter(({ issue }) => issue.desc.trim() &&
+            (scope === 'missing' ? needsAiFill(issue, subjects, milestones) : scope === 'open' ? issue.status !== 'fixed' : true));
+        if (!picked.length) { organizeUI('Nothing to do: every bug already has its info filled in.', 'Start', 'startAiFill'); return; }
+
+        const ctx = { subjects, milestones, tags: tagsOf(source.map(x => x.issue)) };
+        const items = picked.map((x, i) => ({ i, text: organizeText(x.issue) }));
+        const results = new Map();
+        for (let pass = 0; pass < 2 && results.size < items.length; pass++) {
+            const batches = chunk(items.filter(it => !results.has(it.i)), FILL_BATCH);
+            for (let b = 0; b < batches.length; b++) {
+                organizeUI(`Asking the AI${pass ? ' again for skipped bugs' : ''}… batch ${b + 1} of ${batches.length} (${picked.length} bugs)`, 'Working…', 'startAiFill', true);
+                const raw = (await callAiFunction('organize', { step: 'fill', items: batches[b], ...ctx }, 120000)) || (await askGemini(buildFillPrompt(batches[b], ctx)));
+                parseFillResults(raw, batches[b].map(it => it.i), ctx).forEach((v, k) => results.set(k, v));
+            }
+        }
+
+        fillPlan = {
+            rows: picked.map((x, i) => {
+                const s = results.get(i);
+                if (!s) return null;
+                const f = planFill(x.issue, s, { fields, onlyEmpty, subjects });
+                return Object.keys(f).length ? { project: x.project, issue: x.issue, fields: f, newSubject: !!(f.subject && s.newSubject), on: true } : null;
+            }).filter(Boolean),
+            total: picked.length,
+            skipped: picked.length - results.size
+        };
+        renderFillPreview();
+    } catch (e) {
+        console.error('AI fill error:', e);
+        organizeUI(e.userMessage || e.message || 'Something went wrong.', 'Try again', 'startAiFill');
+        if (e.noKey || e.badKey) { closeModals(); openSettings('ai'); toast(e.userMessage); }
+    }
+}
+
+function renderFillPreview() {
+    const p = fillPlan;
+    const multi = new Set(p.rows.map(r => r.project)).size > 1;
+    const on = p.rows.filter(r => r.on).length;
+    const newSubjects = [...new Set(p.rows.filter(r => r.newSubject).map(r => r.fields.subject))];
+    const show = (k, v) => k === 'impact' ? getImpactLabel(v) : k === 'points' ? `${v} pt${v === '1' ? '' : 's'}` : v;
+    $('organizeBody').innerHTML = `
+        ${newSubjects.length ? `<div><h3 class="font-bold mb-1.5">New subjects</h3><div class="flex flex-wrap gap-1.5">${newSubjects.map(s => `<span class="text-xs px-2.5 py-1 rounded-full bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-200">+ ${esc(s)}</span>`).join('')}</div></div>` : ''}
+        <div>
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+                <h3 class="font-bold">Changes (${on} of ${p.rows.length} selected)</h3>
+                <div class="text-xs flex gap-3">
+                    <button type="button" data-action="fillAll" data-on="1" class="underline hover:text-blue-600">Select all</button>
+                    <button type="button" data-action="fillAll" data-on="0" class="underline hover:text-blue-600">Select none</button>
+                </div>
+            </div>
+            ${p.rows.length ? `<ul class="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded">
+                ${p.rows.map((r, k) => `
+                <li class="flex gap-3 items-start p-2 ${r.on ? '' : 'opacity-50'}">
+                    <input type="checkbox" data-action="fillToggle" data-idx="${k}" ${r.on ? 'checked' : ''} class="mt-1 w-4 h-4" aria-label="Apply AI changes to ${esc(r.issue.tag || 'new issue')}">
+                    <div class="min-w-0 flex-1">
+                        <div class="text-xs text-gray-500 dark:text-gray-400 font-mono">${esc(r.issue.tag || 'NEW')}${multi ? ` · ${esc(r.project)}` : ''}</div>
+                        <div class="truncate" title="${esc(r.issue.desc)}">${esc(r.issue.desc)}</div>
+                        <div class="text-xs mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                            ${Object.entries(r.fields).map(([k, v]) => {
+                                const before = k === 'tags' ? r.issue.tags : r.issue[k];
+                                return `<span><span class="text-gray-500 dark:text-gray-400">${FIELD_LABELS[k]}:</span> ${before ? `<span class="line-through opacity-60">${esc(show(k, before))}</span> → ` : ''}<b class="text-blue-700 dark:text-blue-300">${esc(show(k, v))}</b>${k === 'subject' && r.newSubject ? ' <span class="text-green-600 dark:text-green-400">(new)</span>' : ''}</span>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                </li>`).join('')}
+            </ul>` : '<p class="italic text-gray-500">The AI had nothing to add.</p>'}
+            ${p.skipped ? `<p class="text-xs text-amber-600 dark:text-amber-400 mt-2">The AI skipped ${p.skipped} bug(s); they stay as they are.</p>` : ''}
+        </div>`;
+    organizeUI(`${p.total} bugs checked.`, `Apply to ${on} bug${on === 1 ? '' : 's'}`, 'applyAiFill');
+}
+
+async function applyAiFill() {
+    const chosen = new Map(fillPlan.rows.filter(r => r.on).map(r => [r.issue.id, r]));
+    if (!chosen.size) return toast('Nothing selected.');
+    organizeUI('Saving…', 'Working…', 'applyAiFill', true);
+    // New subjects join the team list
+    const fresh = [...new Set([...chosen.values()].filter(r => r.newSubject).map(r => r.fields.subject))]
+        .filter(s => !config.subjects.some(x => x.toLowerCase() === s.toLowerCase()));
+    if (fresh.length) await store().saveConfig(sanitizeConfig({ ...config, subjects: [...config.subjects, ...fresh] }));
+    const n = await store().rewriteIssues(i => (chosen.get(i.id) || {}).fields || null);
+    fillPlan = null;
+    closeModals();
+    toast(`✨ AI filled in ${n} bug${n === 1 ? '' : 's'}.${fresh.length ? ` New subjects: ${fresh.join(', ')}.` : ''}`);
 }
 
 async function saveSettings() {
@@ -1204,8 +1339,14 @@ function renderIssues() {
 // ==========================================
 // The form lives in an overlay (#issueModal), opened by the + button or Edit.
 let formDirty = false;
-$('issueForm').addEventListener('input', () => { formDirty = true; });
-$('issueForm').addEventListener('change', () => { formDirty = true; });
+const touchedFields = new Set(); // fields set by hand (or by ✨) — auto-fill leaves these alone
+const FORM_FIELD_IDS = { subject: 'subject', impact: 'impact', points: 'points', milestone: 'milestone', tags: 'tags' };
+$('issueForm').addEventListener('input', (e) => { formDirty = true; markTouched(e.target); });
+$('issueForm').addEventListener('change', (e) => { formDirty = true; markTouched(e.target); });
+function markTouched(el) {
+    const f = Object.keys(FORM_FIELD_IDS).find(k => FORM_FIELD_IDS[k] === (el && el.id));
+    if (f) touchedFields.add(f);
+}
 
 function openIssueForm() {
     clearForm();
@@ -1241,6 +1382,7 @@ $('issueForm').addEventListener('submit', (e) => {
     // Only subjects the AI proposed in this form get added to the team list
     if (aiNewSubjects.has(fields.subject)) adoptSubject(fields.subject);
     aiNewSubjects.clear();
+    const touched = new Set(touchedFields); // read before clearForm() resets it
     clearForm();
     closeModals();
     if (id) {
@@ -1249,6 +1391,7 @@ $('issueForm').addEventListener('submit', (e) => {
         const issue = sanitizeIssue({ ...fields, id: newId(), status: 'open', notes: [], createdBy: who(), createdAt: Date.now() });
         issue.history = withHistory([], who(), 'created');
         store().create(issue);
+        if (autoFillEnabled() && aiAvailable()) autoFillNew(issue, touched);
     }
 });
 
@@ -1278,6 +1421,7 @@ function clearForm() {
     $('formTitle').innerText = "Log Issue";
     $('submitBtn').innerText = "Save Issue";
     aiNewSubjects.clear();
+    touchedFields.clear();
     formDirty = false;
 }
 
@@ -1521,63 +1665,149 @@ async function callAiFunction(name, payload, timeout = 30000) {
 }
 
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+const lsGet = (k) => { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } };
+const lsSet = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (e) {} };
+const geminiKey = () => lsGet('gemini_api_key').trim();
 
-// Asks Google which models this key may use and picks the best "flash" one.
-async function geminiModel(key, refresh) {
-    try { if (!refresh && localStorage.getItem('gemini_model')) return localStorage.getItem('gemini_model'); } catch (e) {}
-    const res = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': key } });
-    if (res.status === 400 || res.status === 401 || res.status === 403) throw Object.assign(new Error('bad key'), { badKey: true });
-    if (!res.ok) throw new Error(`Could not list Gemini models (status ${res.status}).`);
-    const model = pickGeminiModel((await res.json()).models);
-    if (!model) throw new Error('No suitable Gemini model is available for this API key.');
-    try { localStorage.setItem('gemini_model', model); } catch (e) {}
-    return model;
+// Errors the user can act on carry `.userMessage`
+const aiError = (msg, extra = {}) => Object.assign(new Error(msg), { userMessage: msg }, extra);
+
+async function geminiFetch(url, opts) {
+    try { return await fetch(url, opts); }
+    catch (e) { throw aiError('Could not reach Google Gemini. Check your internet connection, or whether an ad-blocker/privacy extension blocks generativelanguage.googleapis.com.'); }
 }
 
-// Sends a prompt to Gemini with the personal key and returns the parsed JSON answer.
-async function askGemini(promptText) {
-    let key = null;
-    try { key = localStorage.getItem('gemini_api_key'); } catch (e) {}
-    if (!key) {
-        key = prompt("Enter your Gemini API Key to enable AI suggestions.\nGet one free at aistudio.google.com/apikey\n(It is stored only in this browser.)");
-        if (!key) return null;
-        key = key.trim();
-        try { localStorage.setItem('gemini_api_key', key); } catch (e) {}
+// Models to try, best first: from Google's list for this key, then known fallbacks.
+async function geminiModels(key, refresh) {
+    const cached = lsGet('gemini_model');
+    if (cached && !refresh) return [cached, ...FALLBACK_MODELS.filter(m => m !== cached)];
+    const res = await geminiFetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': key } });
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+        const msg = ((await res.json().catch(() => ({}))).error || {}).message || '';
+        throw aiError(/api key|API_KEY/i.test(msg) || res.status !== 400
+            ? 'Gemini rejected the API key. Check it in ⚙️ Settings → AI (and that the "Generative Language API" is enabled for it).'
+            : 'Gemini refused the request: ' + msg, { badKey: true });
     }
-    const forgetKey = () => {
-        try { localStorage.removeItem('gemini_api_key'); localStorage.removeItem('gemini_model'); } catch (e) {}
-        return new Error("Gemini rejected the API key, so it was removed. Click ✨ again to enter a new one.");
-    };
+    const picked = res.ok ? pickGeminiModel((await res.json().catch(() => ({}))).models) : null;
+    return picked ? [picked, ...FALLBACK_MODELS.filter(m => m !== picked)] : [...FALLBACK_MODELS];
+}
+
+// Sends a prompt to Gemini with the personal key and returns { json, model }.
+async function geminiGenerate(promptText) {
+    const key = geminiKey();
+    if (!key) throw aiError('No Gemini API key yet. Add one in ⚙️ Settings → AI (free at aistudio.google.com/apikey).', { noKey: true });
     const body = JSON.stringify({
         contents: [{ parts: [{ text: promptText }] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0.2 }
     });
-    try {
-        for (let attempt = 0; attempt < 2; attempt++) {
-            const model = await geminiModel(key, attempt > 0);
-            const res = await fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-                body
+    let lastStatus = 0;
+    for (let pass = 0; pass < 2; pass++) {
+        const models = await geminiModels(key, pass > 0);
+        for (const model of models) {
+            const res = await geminiFetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body
             });
-            if (res.status === 404 && attempt === 0) continue; // model retired: pick a new one
-            if (res.status === 401 || res.status === 403) throw forgetKey();
+            lastStatus = res.status;
+            if (res.status === 404) continue; // model not available: try the next one
+            if (res.status === 401 || res.status === 403) throw aiError('Gemini rejected the API key. Check it in ⚙️ Settings → AI.', { badKey: true });
+            if (res.status === 429) throw aiError('Gemini quota reached. Wait a minute and try again (free keys have a per-minute limit).');
             if (res.status === 400) {
-                const msg = ((await res.json().catch(() => ({}))).error || {}).message || '';
-                if (/api key/i.test(msg)) throw forgetKey();
-                throw new Error('Gemini could not handle the request: ' + (msg || 'bad request'));
+                const msg = ((await res.json().catch(() => ({}))).error || {}).message || 'bad request';
+                if (/api key/i.test(msg)) throw aiError('Gemini rejected the API key. Check it in ⚙️ Settings → AI.', { badKey: true });
+                throw aiError('Gemini could not handle the request: ' + msg);
             }
-            if (res.status === 429) throw new Error('Gemini quota reached. Try again in a minute.');
-            if (!res.ok) throw new Error(`Gemini request failed (status ${res.status}).`);
+            if (!res.ok) throw aiError(`Gemini request failed (status ${res.status}). Try again later.`);
             const data = await res.json();
-            const text = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0].text;
-            if (!text) throw new Error('Gemini returned no answer (it may have been blocked). Try rewording the description.');
-            return parseAiJson(text);
+            const cand = data.candidates && data.candidates[0];
+            const text = cand && cand.content && cand.content.parts && cand.content.parts.map(p => p.text || '').join('');
+            if (!text) throw aiError('Gemini returned no answer (it may have been blocked). Try rewording the description.');
+            lsSet('gemini_model', model);
+            try { return { json: parseAiJson(text), model }; }
+            catch (e) { throw aiError('Gemini answered in an unexpected format. Try again.'); }
         }
-        throw new Error('Gemini model not found.');
+        lsSet('gemini_model', '');
+    }
+    throw aiError(`None of the Gemini models are available for this key (last status ${lastStatus}).`);
+}
+
+async function askGemini(promptText) {
+    return (await geminiGenerate(promptText)).json;
+}
+
+// True when an AI path exists: a personal key, or (signed in) the team's server function.
+const aiAvailable = () => !!geminiKey() || isOnline();
+
+// Shows an AI error; missing/bad keys open Settings at the AI section.
+function showAiError(e) {
+    console.error('AI error:', e);
+    const msg = e.userMessage || e.message || 'AI request failed. Check the console.';
+    // Don't cover an open form; offer a button instead
+    if ((e.noKey || e.badKey) && !openModalEl()) openSettings('ai');
+    else toast(msg, (e.noKey || e.badKey) && !openModalEl() ? 'Open Settings' : null, () => openSettings('ai'), 9000);
+}
+
+function renderAiSettings() {
+    const key = geminiKey();
+    $('aiKeyInput').value = '';
+    $('aiKeyInput').placeholder = key ? `Saved key …${key.slice(-4)} (paste a new one to replace)` : 'Paste your Gemini API key';
+    $('aiAutoFill').checked = autoFillEnabled();
+    $('aiStatus').innerText = key ? 'A key is saved. Click “Test AI” to check it.' : (isOnline() ? 'No personal key. The team server function is used if it is deployed.' : 'No key yet.');
+    $('aiStatus').className = 'text-xs text-gray-500 dark:text-gray-400';
+}
+
+function saveAiKey() {
+    const v = $('aiKeyInput').value.trim();
+    if (!v) return toast('Paste a key first.');
+    if (/\s/.test(v) || v.length < 20) return toast('That does not look like a Gemini API key.');
+    lsSet('gemini_api_key', v);
+    lsSet('gemini_model', '');
+    renderAiSettings();
+    testAi();
+}
+
+const autoFillEnabled = () => lsGet('ai_autofill') !== 'off';
+document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'aiAutoFill') lsSet('ai_autofill', e.target.checked ? '' : 'off');
+});
+
+// Fills the fields of a just-saved bug that the user didn't set themselves.
+async function autoFillNew(issue, touched) {
+    const project = currentProject;
+    try {
+        const ctx = aiContext();
+        const raw = (await callAiFunction('categorize', { desc: issue.desc, ...ctx })) || (await askGemini(buildCategorizePrompt(issue.desc, ctx)));
+        const sugg = parseAiSuggestion(raw, ctx);
+        const fields = planFill(issue, sugg, { fields: FILL_FIELDS.filter(f => !touched.has(f)), onlyEmpty: false, subjects: subjectChoices() });
+        // Milestone only when the user left it empty
+        if (issue.milestone) delete fields.milestone;
+        if (!Object.keys(fields).length || currentProject !== project) return;
+        // In the cloud the new bug arrives via the live listener; wait for it briefly
+        for (let k = 0; k < 20 && !issues.some(i => i.id === issue.id); k++) await new Promise(res => setTimeout(res, 250));
+        if (!issues.some(i => i.id === issue.id)) return;
+        if (fields.subject && sugg.newSubject) adoptSubject(fields.subject);
+        store().update(issue.id, fields);
+        const tag = (issues.find(i => i.id === issue.id) || {}).tag || 'New bug';
+        toast(`✨ AI filled in ${tag}: ${Object.keys(fields).map(f => f === 'impact' ? 'priority' : f).join(', ')}.`);
     } catch (e) {
-        if (e.badKey) throw forgetKey();
-        throw e;
+        if (e.noKey) return; // auto-fill is optional; ✨ and Settings explain how to set it up
+        showAiError(e);
+    }
+}
+
+async function testAi() {
+    $('aiStatus').innerText = 'Testing…';
+    $('aiStatus').className = 'text-xs text-gray-500 dark:text-gray-400';
+    try {
+        const viaFn = await callAiFunction('categorize', { desc: 'Game crashes when I open the shop', ...aiContext() });
+        if (viaFn) { $('aiStatus').innerText = '✅ Working (team server function).'; $('aiStatus').className = 'text-xs text-green-600 dark:text-green-400'; return; }
+        const { json, model } = await geminiGenerate('Reply with exactly this JSON: {"ok": true}');
+        if (!json || json.ok !== true) throw aiError('Gemini answered, but not as expected.');
+        $('aiStatus').innerText = `✅ Working. Model: ${model}`;
+        $('aiStatus').className = 'text-xs text-green-600 dark:text-green-400';
+    } catch (e) {
+        console.error('AI test failed:', e);
+        $('aiStatus').innerText = '❌ ' + (e.userMessage || e.message);
+        $('aiStatus').className = 'text-xs text-red-600 dark:text-red-400';
     }
 }
 
@@ -1593,11 +1823,11 @@ async function autoCategorize() {
         const raw = (await callAiFunction('categorize', { desc, ...ctx })) || (await askGemini(buildCategorizePrompt(desc, ctx)));
         if (raw) {
             const changed = applySuggestion(parseAiSuggestion(raw, ctx));
+            FILL_FIELDS.forEach(f => touchedFields.add(f));
             toast(changed.length ? `AI filled in: ${changed.join(', ')}. Check before saving.` : 'The AI had no usable suggestions.');
         }
     } catch (e) {
-        console.error("AI Error:", e);
-        toast(e.message || "AI generation failed. Check console.");
+        showAiError(e);
     } finally {
         btn.innerText = originalText;
         btn.disabled = false;
@@ -1718,6 +1948,11 @@ const actions = {
     settingsMove: (el) => settingsMove(el.dataset.list, Number(el.dataset.idx), Number(el.dataset.dir)),
     settingsDelete: (el) => settingsDelete(el.dataset.list, Number(el.dataset.idx)),
     openOrganize: () => openOrganize(),
+    openAiFill: () => openAiFill(),
+    startAiFill: () => startAiFill(),
+    applyAiFill: () => applyAiFill(),
+    fillAll: (el) => { fillPlan.rows.forEach(row => { row.on = el.dataset.on === '1'; }); renderFillPreview(); },
+    fillToggle: (el) => { const row = fillPlan.rows[Number(el.dataset.idx)]; row.on = !row.on; renderFillPreview(); },
     startOrganize: () => startOrganize(),
     applyOrganize: () => applyOrganize(),
     organizeAll: (el) => { organizePlan.rows.forEach(row => { row.on = el.dataset.on === '1'; }); renderOrganizePreview(); },
@@ -1747,7 +1982,9 @@ const actions = {
     quickView: (el) => setFilters({ ...QUICK_VIEWS[el.dataset.view].filters, q: filters.q, hideDone: filters.hideDone }),
     toggleHideDone: () => setFilters({ ...filters, hideDone: !filters.hideDone }),
     toggleSortDir: () => setFilters({ ...filters, rev: !filters.rev }),
-    forgetGeminiKey: () => { try { localStorage.removeItem('gemini_api_key'); } catch (e) {} toast('Gemini key removed from this browser.'); }
+    forgetGeminiKey: () => { lsSet('gemini_api_key', ''); lsSet('gemini_model', ''); if ($('aiKeyInput')) renderAiSettings(); toast('Gemini key removed from this browser.'); },
+    saveAiKey: () => saveAiKey(),
+    testAi: () => testAi(),
 };
 
 document.addEventListener('click', (e) => {

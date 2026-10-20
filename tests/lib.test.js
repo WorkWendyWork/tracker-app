@@ -288,6 +288,72 @@ test('reorganize: assignment parsing keeps only valid answers', () => {
     assert.match(lib.buildAssignPrompt([{ i: 0, text: 't' }], subjects, ['crash']), /EXACTLY one of these per bug\): \["Audio", "Menus"\]/);
 });
 
+test('pickGeminiModel falls back to aliases and non-flash models', () => {
+    const m = (name) => ({ name: `models/${name}`, supportedGenerationMethods: ['generateContent'] });
+    assert.equal(lib.pickGeminiModel([m('gemini-flash-latest'), m('gemini-pro-latest')]), 'gemini-flash-latest');
+    assert.equal(lib.pickGeminiModel([m('gemini-3-pro')]), 'gemini-3-pro');
+    assert.equal(lib.pickGeminiModel([m('gemini-3-flash'), m('gemini-3-pro')]), 'gemini-3-flash');
+    assert.equal(lib.pickGeminiModel([m('gemini-2.5-flash-native-audio'), m('gemma-3')]), null);
+    assert.ok(lib.FALLBACK_MODELS.length >= 2);
+});
+
+test('needsAiFill spots missing info', () => {
+    const subjects = ['Audio', 'Menus'];
+    const full = { subject: 'Audio', points: '3', tags: 'sound', milestone: 'Next Patch' };
+    assert.equal(lib.needsAiFill(full, subjects, ['Next Patch']), false);
+    assert.equal(lib.needsAiFill({ ...full, points: '' }, subjects), true);
+    assert.equal(lib.needsAiFill({ ...full, tags: '' }, subjects), true);
+    assert.equal(lib.needsAiFill({ ...full, subject: 'Uncategorised' }, subjects), true);
+    assert.equal(lib.needsAiFill({ ...full, subject: 'UI & Navigation' }, [...subjects, 'UI & Navigation']), true);
+    assert.equal(lib.needsAiFill({ ...full, milestone: '' }, subjects, ['Next Patch']), true);
+    assert.equal(lib.needsAiFill({ ...full, milestone: '' }, subjects, []), false); // no milestones defined
+});
+
+test('placeholder subjects like Uncategorised count as missing', () => {
+    for (const p of ['Uncategorised', 'uncategorized', 'Other', 'Misc', 'General', 'N/A', 'TBD']) assert.equal(lib.isPlaceholderSubject(p), true, p);
+    for (const ok of ['Audio', 'Economy', 'General Settings']) assert.equal(lib.isPlaceholderSubject(ok), false, ok);
+    const subjects = ['Audio', 'Uncategorised'];
+    const bug = { subject: 'Uncategorised', points: '3', tags: 'x', milestone: '' };
+    assert.equal(lib.needsAiFill(bug, subjects), true);
+    assert.deepEqual(lib.planFill(bug, { subject: 'Audio' }, { subjects }), { subject: 'Audio' });
+    assert.equal(lib.parseAiSuggestion({ subject: 'Other' }, { subjects: ['Audio', 'Other'] }).subject, null);
+    assert.equal(lib.parseAiSuggestion({ subject: 'uncategorised' }, { subjects }).subject, null);
+});
+
+test('fill prompt and results parsing', () => {
+    const ctx = { subjects: ['Audio'], milestones: ['Next Patch'], tags: ['crash'] };
+    const p = lib.buildFillPrompt([{ i: 0, text: 'Music cuts out' }, { i: 1, text: 'Save "lost"' }], ctx);
+    assert.match(p, /"results"/);
+    assert.match(p, /\{"i":1,"text":"Save \\"lost\\""\}/);
+    assert.match(p, /\["Next Patch"\]/);
+    const m = lib.parseFillResults({ results: [
+        { i: 0, subject: 'audio', impact: '2', points: '3', tags: ['sound'], milestone: 'next patch' },
+        { i: 1, subject: 'Save System', impact: 9 },
+        { i: 1, subject: 'Audio' },          // duplicate -> first wins
+        { i: 5, subject: 'Audio' },          // unknown id
+        { i: 2, subject: 'X & Y' }           // nothing usable
+    ] }, [0, 1, 2], ctx);
+    assert.deepEqual([...m.keys()], [0, 1]);
+    assert.equal(m.get(0).subject, 'Audio');
+    assert.equal(m.get(0).milestone, 'Next Patch');
+    assert.equal(m.get(1).subject, 'Save System');
+    assert.equal(m.get(1).newSubject, true);
+    assert.equal(m.get(1).impact, null);
+    assert.equal(lib.parseFillResults(null, [0]).size, 0);
+});
+
+test('planFill respects "only empty" and chosen fields', () => {
+    const s = { subject: 'Audio', impact: '1', points: '3', tags: ['sound', 'crash'], milestone: 'Next Patch' };
+    const subjects = ['Audio', 'Menus'];
+    const empty = { subject: 'Uncategorised', impact: '3', points: '', tags: '', milestone: '' };
+    assert.deepEqual(lib.planFill(empty, s, { subjects }), { subject: 'Audio', points: '3', milestone: 'Next Patch', tags: 'sound, crash' });
+    const set = { subject: 'Menus', impact: '3', points: '5', tags: 'ui', milestone: 'Backlog' };
+    assert.deepEqual(lib.planFill(set, s, { subjects }), {});
+    assert.deepEqual(lib.planFill(set, s, { subjects, onlyEmpty: false }), { subject: 'Audio', impact: '1', points: '3', milestone: 'Next Patch', tags: 'ui, sound, crash' });
+    assert.deepEqual(lib.planFill(empty, s, { subjects, fields: ['points'] }), { points: '3' });
+    assert.deepEqual(lib.planFill({ ...set, tags: 'Sound, crash' }, s, { subjects, onlyEmpty: false, fields: ['tags'] }), {});
+});
+
 test('pickGeminiModel chooses the newest stable flash model', () => {
     const m = (name, methods = ['generateContent']) => ({ name: `models/${name}`, supportedGenerationMethods: methods });
     assert.equal(lib.pickGeminiModel([m('gemini-2.0-flash'), m('gemini-2.5-flash'), m('gemini-2.5-flash-lite'), m('gemini-2.5-pro')]), 'gemini-2.5-flash');

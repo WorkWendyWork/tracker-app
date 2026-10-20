@@ -321,8 +321,10 @@ function parseAiSuggestion(raw, ctx = {}) {
         .map(t => findCI(existingTags, t) || t.toLowerCase())
         .filter((t, k, arr) => arr.indexOf(t) === k)
         .slice(0, 4);
-    const known = findCI(subjects, r.subject);
-    const fresh = !known && isSingleSubject(r.subject) ? cleanSubjectName(r.subject) : null;
+    // Placeholders like "Uncategorised" or "Other" are never a valid answer
+    const placeholder = isPlaceholderSubject(r.subject);
+    const known = placeholder ? null : findCI(subjects, r.subject);
+    const fresh = !known && !placeholder && isSingleSubject(r.subject) ? cleanSubjectName(r.subject) : null;
     return {
         subject: known || fresh || null,
         newSubject: !!fresh,
@@ -399,15 +401,95 @@ function parseAssignments(raw, ids, subjects, existingTags = []) {
 
 // Picks the best available Gemini "flash" model from a models.list response,
 // so the app keeps working when Google retires a model name.
+// Any text-generating Gemini model works; "flash" models are preferred (fast, cheap).
 function pickGeminiModel(models) {
     const usable = (Array.isArray(models) ? models : [])
-        .filter(m => m && typeof m.name === 'string' && /^models\/gemini-[\d.]+-flash/.test(m.name))
+        .filter(m => m && typeof m.name === 'string' && /^models\/gemini-/.test(m.name))
         .filter(m => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes('generateContent'))
-        .filter(m => !/(tts|image|audio|live|embedding|thinking|exp)/i.test(m.name));
+        .filter(m => !/(tts|image|audio|live|embedding|thinking|exp|vision|native)/i.test(m.name));
     const version = (n) => parseFloat((n.match(/gemini-([\d.]+)/) || [])[1]) || 0;
-    const score = (n) => version(n) * 100 - (/lite/.test(n) ? 5 : 0) - (/preview/.test(n) ? 3 : 0) - (/-\d{3,}$/.test(n) ? 1 : 0);
+    const score = (n) => (/flash/.test(n) ? 1000 : 0) + version(n) * 100
+        - (/lite/.test(n) ? 5 : 0) - (/preview/.test(n) ? 3 : 0) - (/-\d{3,}$/.test(n) ? 1 : 0)
+        + (/-latest$/.test(n) && !version(n) ? 50 : 0);
     usable.sort((a, b) => score(b.name) - score(a.name));
     return usable.length ? usable[0].name.replace(/^models\//, '') : null;
+}
+
+// Tried in order when Google's model list can't be read.
+const FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+
+// ==========================================
+// ✨ AI fill: suggestions for many bugs in one request.
+// ==========================================
+const FILL_BATCH = 25;
+const FILL_FIELDS = ['subject', 'impact', 'points', 'tags', 'milestone'];
+
+// Placeholder subjects mean "not categorised yet".
+const isPlaceholderSubject = (s) => /^(un-?categori[sz]ed|uncategori[sz]ed|other|others|misc|miscellaneous|general|none|n\/?a|todo|tbd|unknown|new)$/i.test(String(s ?? '').trim());
+
+// A real subject: one topic, from the team list, not a placeholder.
+const isGoodSubject = (s, subjects) => isSingleSubject(s) && !isPlaceholderSubject(s) &&
+    subjects.some(x => x.toLowerCase() === String(s).toLowerCase());
+
+// A bug is missing info when it has no story points, no tags, no milestone,
+// or a subject that isn't a proper single-topic subject from the team list.
+function needsAiFill(issue, subjects = SUBJECTS, milestones = []) {
+    const okSubject = isGoodSubject(issue.subject, subjects);
+    return !okSubject || !issue.points || !parseTags(issue.tags).length || (milestones.length > 0 && !issue.milestone);
+}
+
+function buildFillPrompt(items, ctx = {}) {
+    const subjects = (ctx.subjects && ctx.subjects.length ? ctx.subjects : SUBJECTS).slice(0, LIMITS.subjects);
+    const milestones = (ctx.milestones || []).slice(0, LIMITS.milestones);
+    const tags = (ctx.tags || []).slice(0, 150);
+    return [
+        'You triage bug reports for a video game team.',
+        '',
+        'For EVERY bug below return:',
+        `- "subject": the best fitting one of [${quoteList(subjects)}], or a NEW subject if none fits. ${SUBJECT_RULE}`,
+        '- "impact": "1" (Critical: crash, data loss, blocks play), "2" (High), "3" (Medium) or "4" (Low: cosmetic, typo)',
+        '- "points": story-point estimate of the fix effort, one of "1", "2", "3", "5", "8"',
+        `- "tags": 1 to 4 short lowercase tags. Prefer existing tags: [${quoteList(tags)}]`,
+        milestones.length
+            ? `- "milestone": one of [${quoteList(milestones)}] that fits best (urgent and small work goes first)`
+            : '- "milestone": ""',
+        '',
+        'Bugs (JSON lines):',
+        ...items.map(it => JSON.stringify({ i: it.i, text: it.text })),
+        '',
+        'Return ONLY JSON: {"results": [{"i": 0, "subject": "...", "impact": "2", "points": "3", "tags": ["..."], "milestone": "..."}, ...]} with one entry per bug.'
+    ].join('\n');
+}
+
+// Returns Map(i -> suggestion as from parseAiSuggestion) for answers with at least one usable field.
+function parseFillResults(raw, ids, ctx = {}) {
+    const out = new Map();
+    const valid = new Set(ids);
+    (raw && Array.isArray(raw.results) ? raw.results : []).forEach(r => {
+        const i = Number(r && r.i);
+        if (!valid.has(i) || out.has(i)) return;
+        const s = parseAiSuggestion(r, ctx);
+        if (FILL_FIELDS.some(f => s[f])) out.set(i, s);
+    });
+    return out;
+}
+
+// What the AI would change on one bug. onlyEmpty: never overwrite what's already set.
+function planFill(issue, s, { fields = FILL_FIELDS, onlyEmpty = true, subjects = SUBJECTS } = {}) {
+    const out = {};
+    const want = new Set(fields);
+    const subjectOk = isGoodSubject(issue.subject, subjects);
+    if (want.has('subject') && s.subject && s.subject !== issue.subject && (!onlyEmpty || !subjectOk)) out.subject = s.subject;
+    if (want.has('impact') && s.impact && s.impact !== String(issue.impact) && !onlyEmpty) out.impact = s.impact;
+    if (want.has('points') && s.points && s.points !== issue.points && (!onlyEmpty || !issue.points)) out.points = s.points;
+    if (want.has('milestone') && s.milestone && s.milestone !== issue.milestone && (!onlyEmpty || !issue.milestone)) out.milestone = s.milestone;
+    if (want.has('tags') && s.tags && (!onlyEmpty || !parseTags(issue.tags).length)) {
+        const merged = parseTags(issue.tags);
+        s.tags.forEach(t => { if (!merged.some(m => m.toLowerCase() === t.toLowerCase())) merged.push(t); });
+        const joined = clip(merged.join(', '), LIMITS.tags);
+        if (joined !== parseTags(issue.tags).join(', ')) out.tags = joined;
+    }
+    return out;
 }
 
 // Returns an error message, or '' if the file is an acceptable screenshot.
@@ -440,6 +522,7 @@ if (typeof module !== 'undefined') {
         sanitizeConfig, makeComparators, buildCategorizePrompt, parseAiSuggestion, pickGeminiModel,
         isSingleSubject, cleanSubjectName, ORGANIZE_BATCH, ORGANIZE_SAMPLE, organizeText,
         buildTaxonomyPrompt, parseTaxonomy, buildAssignPrompt, parseAssignments,
+        FALLBACK_MODELS, FILL_BATCH, FILL_FIELDS, needsAiFill, isPlaceholderSubject, isGoodSubject, buildFillPrompt, parseFillResults, planFill,
         checkImageFile, parseAiJson, chunk
     };
 }

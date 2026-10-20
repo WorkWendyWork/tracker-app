@@ -10,7 +10,8 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const {
     buildCategorizePrompt, parseAiSuggestion, pickGeminiModel, parseAiJson, sanitizeConfig,
-    buildTaxonomyPrompt, parseTaxonomy, buildAssignPrompt, parseAssignments, ORGANIZE_BATCH, ORGANIZE_SAMPLE
+    buildTaxonomyPrompt, parseTaxonomy, buildAssignPrompt, parseAssignments, ORGANIZE_BATCH, ORGANIZE_SAMPLE,
+    buildFillPrompt, parseFillResults, FILL_BATCH
 } = require('./lib.js');
 
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
@@ -93,6 +94,13 @@ exports.organize = onCall({ secrets: [GEMINI_API_KEY], maxInstances: 2, timeoutS
         const tags = cleanTags(data.tags);
         const map = parseAssignments(await askGemini(buildAssignPrompt(items, subjects, tags)), items.map(it => it.i), subjects, tags);
         return { assignments: [...map].map(([i, a]) => ({ i, subject: a.subject, tags: a.tags })) };
+    }
+    if (data.step === 'fill') {
+        const items = cleanItems(data.items, FILL_BATCH);
+        const cfg = sanitizeConfig({ subjects: data.subjects, milestones: data.milestones });
+        const ctx = { subjects: cfg.subjects, milestones: cfg.milestones, tags: cleanTags(data.tags) };
+        const map = parseFillResults(await askGemini(buildFillPrompt(items, ctx)), items.map(it => it.i), ctx);
+        return { results: [...map].map(([i, s]) => ({ i, ...s })) };
     }
     throw new HttpsError('invalid-argument', 'Unknown step.');
 });
