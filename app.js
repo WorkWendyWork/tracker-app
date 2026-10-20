@@ -684,8 +684,8 @@ function openSettings(section) {
     };
     renderSettings();
     renderAiSettings();
-    openModal('settingsModal', section === 'ai' ? 'aiKeyInput' : undefined);
-    if (section === 'ai') $('aiSettings').scrollIntoView({ block: 'start' });
+    showSettingsTab(SETTINGS_TABS.includes(section) ? section : (lsGet('settingsTab') || 'subjects'), false);
+    openModal('settingsModal', section === 'ai' ? 'aiKeyInput' : `settingsTab-${settingsTab}`);
 }
 
 const SETTINGS_SECTIONS = {
@@ -694,12 +694,45 @@ const SETTINGS_SECTIONS = {
     tags: { title: 'Tags', hint: 'Rename to fix typos or merge two tags (give them the same name). Deleting removes the tag from its issues.', max: 30 }
 };
 
+// Tabs: AI, Subjects, Milestones, Tags. The last one used is remembered.
+const SETTINGS_TABS = ['ai', 'subjects', 'milestones', 'tags'];
+let settingsTab = 'subjects';
+
+function showSettingsTab(tab, focus) {
+    settingsTab = SETTINGS_TABS.includes(tab) ? tab : 'subjects';
+    lsSet('settingsTab', settingsTab);
+    SETTINGS_TABS.forEach(t => {
+        const btn = $(`settingsTab-${t}`);
+        const on = t === settingsTab;
+        btn.setAttribute('aria-selected', String(on));
+        btn.tabIndex = on ? 0 : -1;
+        btn.classList.toggle('border-blue-600', on);
+        btn.classList.toggle('text-blue-600', on);
+        btn.classList.toggle('dark:text-blue-400', on);
+        btn.classList.toggle('border-transparent', !on);
+        const panel = $(`settingsPanel-${t}`);
+        if (panel) panel.classList.toggle('hidden', !on);
+    });
+    if (focus) $(`settingsTab-${settingsTab}`).focus();
+}
+
+// Arrow keys / Home / End move between tabs (standard tab keyboard pattern)
+document.addEventListener('keydown', (e) => {
+    const tab = e.target.closest && e.target.closest('[role="tab"][data-tab]');
+    if (!tab) return;
+    const k = SETTINGS_TABS.indexOf(tab.dataset.tab);
+    const next = { ArrowRight: k + 1, ArrowLeft: k - 1, Home: 0, End: SETTINGS_TABS.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    showSettingsTab(SETTINGS_TABS[(next + SETTINGS_TABS.length) % SETTINGS_TABS.length], true);
+});
+
 function renderSettings() {
     const btn = 'text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-30';
     $('settingsBody').innerHTML = Object.entries(SETTINGS_SECTIONS).map(([list, s]) => {
         const rows = settingsDraft[list];
         return `
-        <section class="space-y-2" aria-labelledby="set-${list}">
+        <section id="settingsPanel-${list}" role="tabpanel" aria-labelledby="settingsTab-${list}" data-tab-panel="${list}" class="space-y-2 ${settingsTab === list ? '' : 'hidden'}">
             <div class="flex items-center justify-between gap-2">
                 <h3 id="set-${list}" class="font-bold text-gray-800 dark:text-white">${s.title}</h3>
                 <div class="flex gap-1.5">
@@ -720,7 +753,7 @@ function renderSettings() {
                     <button type="button" data-action="settingsDelete" data-list="${list}" data-idx="${k}" class="${btn} ${r.deleted ? '' : 'text-red-600 dark:text-red-400'}" aria-label="${r.deleted ? 'Restore' : 'Delete'} ${esc(r.name)}">${r.deleted ? '↺' : '🗑'}</button>
                 </li>`).join('')}</ul>` : '<p class="text-xs italic text-gray-400">None yet.</p>'}
         </section>`;
-    }).join('<hr class="border-gray-200 dark:border-gray-700">');
+    }).join('');
 }
 
 document.addEventListener('input', (e) => {
@@ -1949,6 +1982,7 @@ const actions = {
     settingsDelete: (el) => settingsDelete(el.dataset.list, Number(el.dataset.idx)),
     openOrganize: () => openOrganize(),
     openAiFill: () => openAiFill(),
+    settingsTab: (el) => showSettingsTab(el.dataset.tab, true),
     startAiFill: () => startAiFill(),
     applyAiFill: () => applyAiFill(),
     fillAll: (el) => { fillPlan.rows.forEach(row => { row.on = el.dataset.on === '1'; }); renderFillPreview(); },

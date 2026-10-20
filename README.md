@@ -81,7 +81,7 @@ GitHub Actions runs the unit tests, the rules tests, and checks that `tailwind.c
 - **Daily backups:** in Google Cloud Console create a service account with the *Cloud Datastore User* role, create a JSON key, and save it as the repository secret `FIREBASE_SERVICE_ACCOUNT`. The *Daily backup* workflow then saves the database as a downloadable artifact every day (kept 90 days). You can also run it manually from the Actions tab.
 
 ## AI suggestions
-**Setup:** open **⚙️ Settings → ✨ AI**, paste a free Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), click **Save key**, and check that **Test AI** shows ✅. The key stays in your browser only.
+**Setup:** open **⚙️ Settings**, tab **✨ AI**, paste a free Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), click **Save key**, and check that **Test AI** shows ✅. The key stays in your browser only.
 
 - **Auto-fill new bugs** (on by default): after you save a new bug, the AI fills in every field you left untouched. A message tells you what it filled in.
 - **✨ AI fill** (toolbar): checks many bugs at once: only bugs with missing info, all unfinished bugs, all bugs, or all projects. It fills subject, priority, points, tags and milestone; you pick which. With *Only fill empty fields* on, anything already set is kept. Placeholder subjects like "Uncategorised" count as empty. You review every change before applying.
@@ -96,7 +96,7 @@ Subjects are always **one topic** (for example "Audio" or "Save System", never "
 The app asks Google which Gemini models your key can use and picks the newest "flash" model automatically, so it keeps working when Google retires a model.
 
 ## Settings (⚙️)
-Edit the team's lists. Changes apply to every project:
+Settings has four tabs: **✨ AI**, **Subjects**, **Milestones** and **Tags**. List changes apply to every project:
 - **Subjects:** add, rename, reorder (this is also the *Sort: Subject* order) or delete. Issues using a deleted subject move to the first subject.
 - **Milestones:** add planned milestones (they appear in the form and the AI can pick them), rename, or delete (cleared from issues).
 - **Tags:** rename to fix typos, merge two tags by giving them the same name, or delete.
